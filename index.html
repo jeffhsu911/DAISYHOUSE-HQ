@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>餐飲總部戰情分析系統 (HQ Pro - v4.8 強力連線版)</title>
+    
+    <!-- 1. 引入 React 和 Tailwind -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 2. 引入 Firebase SDK (Compat 版本 - 更穩定) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <script>
+        // 初始化 Firebase 服務介面
+        window.FirebaseServices = {
+            init: (rawConfig) => {
+                try {
+                    let configStr = rawConfig.trim();
+                    // 移除 const firebaseConfig = 及結尾分號
+                    if (configStr.indexOf('=') > -1) {
+                        configStr = configStr.substring(configStr.indexOf('=') + 1).trim();
+                    }
+                    if (configStr.endsWith(';')) {
+                        configStr = configStr.slice(0, -1);
+                    }
+                    
+                    // 使用 Function 建構式來解析 JS 物件字串 (比 JSON.parse 更寬容)
+                    const config = new Function("return " + configStr)();
+
+                    if (!firebase.apps.length) {
+                        firebase.initializeApp(config);
+                    }
+                    const db = firebase.firestore();
+                    return db;
+                } catch (e) {
+                    console.error("Firebase Parsing/Init Error:", e);
+                    throw new Error("設定碼格式無法解析，請確認複製內容正確。錯誤訊息: " + e.message);
+                }
+            },
+            subscribe: (db, collection, docId, callback) => {
+                return db.collection(collection).doc(docId).onSnapshot((doc) => {
+                    if (doc.exists) callback(doc.data());
+                }, (error) => {
+                    console.error("Sync Error:", error);
+                });
+            },
+            save: async (db, collection, docId, data) => {
+                await db.collection(collection).doc(docId).set(data, { merge: true });
+            }
+        };
+    </script>
+
+    <!-- 3. 定義樣式 -->
+    <style type="text/tailwindcss">
+        body { font-family: 'Microsoft JhengHei', sans-serif; background-color: #f5f5f4; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        .report-card { @apply bg-white p-4 rounded-lg border border-stone-200 shadow-sm transition-all hover:shadow-md; }
+        select { @apply bg-white border border-stone-300 text-stone-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-1.5; }
+        .btn-primary { @apply flex items-center justify-center gap-2 bg-stone-800 text-white px-4 py-2 rounded-lg hover:bg-stone-700 transition-colors shadow-sm font-medium text-sm; }
+        .btn-outline { @apply flex items-center justify-center gap-2 bg-white text-stone-600 border border-stone-300 px-4 py-2 rounded-lg hover:bg-stone-50 transition-colors shadow-sm font-medium text-sm; }
+        .input-cell { @apply w-full text-right border border-stone-200 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 outline-none text-sm; }
+        .badge { @apply px-2 py-0.5 rounded text-xs font-bold inline-block; }
+        
+        /* 手機版選單樣式 */
+        .mobile-menu-overlay { @apply fixed inset-0 bg-black/50 z-40 md:hidden; }
+        .sidebar { @apply fixed md:relative w-64 h-full bg-stone-800 text-stone-200 shadow-xl z-50 transition-transform duration-300 ease-in-out; }
+        .sidebar.closed { @apply -translate-x-full md:translate-x-0; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // --- Icon 元件 ---
+        const Icon = ({ name, size = 18, className = "" }) => {
+            const icons = {
+                ChefHat: <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z M6 17h12" />,
+                Utensils: <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2 M7 2v20 M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />,
+                DollarSign: <path d="M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />,
+                Scale: <path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z M2 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z M7 21h10 M12 3v18 M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" />,
+                Trash2: <path d="M3 6h18 M19 6v14c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2V6 M8 6V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2 M10 11v6 M14 11v6" />,
+                Plus: <path d="M5 12h14 M12 5v14" />,
+                TrendingUp: <g><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" /><polyline points="17 6 23 6 23 12" /></g>,
+                AlertTriangle: <g><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></g>,
+                Download: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3" />,
+                Upload: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12" />,
+                X: <path d="M18 6 6 18 M6 6l12 12" />,
+                FileText: <g><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></g>,
+                ClipboardList: <g><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="M12 11h4" /><path d="M12 16h4" /><path d="M8 11h.01" /><path d="M8 16h.01" /></g>,
+                Store: <path d="M3 21h18M5 21V7l8-4 8 4v14M8 21v-4h8v4" />,
+                Calendar: <g><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></g>,
+                Activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
+                Box: <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />,
+                RefreshCw: <g><path d="M23 4v6h-6" /><path d="M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></g>,
+                Search: <circle cx="11" cy="11" r="8" />,
+                Link: <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />,
+                ArrowRight: <line x1="5" y1="12" x2="19" y2="12" />,
+                Radar: <g><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 12m-5 0a5 5 0 1 0 10 0a5 5 0 1 0 -10 0" /><path d="M12 3v18" /><path d="M3 12h18" /></g>,
+                Cloud: <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />,
+                CloudOff: <g><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3" /><line x1="1" y1="1" x2="23" y2="23" /></g>,
+                Menu: <g><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></g>
+            };
+            return (
+                <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                    {icons[name] || <circle cx="12" cy="12" r="10" />}
+                </svg>
+            );
+        };
+
+        // --- 預設數據 ---
+        const DEFAULT_INGREDIENTS = [
+            { id: 'i1', name: "漢堡肉排", alias: "冷凍牛肉餅(箱)", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" },
+            { id: 'i2', name: "漢堡麵包", alias: "", unit: "個", capacity: 1, baseUnit: "個", unitCost: 8, note: "" },
+            { id: 'i3', name: "切達起司", alias: "安佳起司片", unit: "包", capacity: 84, baseUnit: "片", unitCost: 5, note: "每包84片" },
+            { id: 'i4', name: "生菜", alias: "", unit: "kg", capacity: 1000, baseUnit: "g", unitCost: 0.08, note: "1kg=1000g" }, 
+            { id: 'i5', name: "可樂糖漿", alias: "可口可樂原液", unit: "桶", capacity: 2000, baseUnit: "ml", unitCost: 0.6, note: "1桶=2000ml" }, 
+            { id: 'i6', name: "海鮮料", alias: "綜合海鮮包", unit: "包", capacity: 500, baseUnit: "g", unitCost: 0.3, note: "每包500g" }, 
+            { id: 'i7', name: "義大利麵", alias: "進口義麵條", unit: "包", capacity: 1000, baseUnit: "g", unitCost: 0.06, note: "每包1kg" }
+        ];
+
+        const DEFAULT_DISHES = [
+            { id: 'd1', name: "經典起司堡", price: 150, storeId: 'ALL' },
+            { id: 'd2', name: "雙層牛肉堡", price: 220, storeId: 'ALL' },
+            { id: 'd3', name: "生菜沙拉", price: 80, storeId: 'ALL' },
+            { id: 'd_set1', name: "雙人分享餐", price: 999, storeId: 'ALL' },
+            { id: 'd_sub1', name: "綜合海鮮義大利麵", price: 0, storeId: 'ALL' }, 
+        ];
+
+        const DEFAULT_RECIPES = [
+            { dishId: 'd1', ingredientId: 'i2', amount: 1 },
+            { dishId: 'd1', ingredientId: 'i1', amount: 1 },
+            { dishId: 'd1', ingredientId: 'i3', amount: 1 },
+            { dishId: 'd1', ingredientId: 'i4', amount: 20 }, 
+            { dishId: 'd2', ingredientId: 'i2', amount: 1 },
+            { dishId: 'd2', ingredientId: 'i1', amount: 2 },
+            { dishId: 'd2', ingredientId: 'i3', amount: 2 },
+            { dishId: 'd2', ingredientId: 'i4', amount: 30 }, 
+            { dishId: 'd3', ingredientId: 'i4', amount: 150 }, 
+            { dishId: 'd_sub1', ingredientId: 'i7', amount: 200 }, 
+            { dishId: 'd_sub1', ingredientId: 'i6', amount: 100 }, 
+        ];
+
+        const INITIAL_STORES = [
+            { id: 's1', name: '台北總店' },
+            { id: 's2', name: '高雄分店' }
+        ];
+
+        const INITIAL_STORE_DATA = {
+            's1': {
+                purchase: { 'i1': 600, 'i2': 500, 'i3': 550, 'i4': 20, 'i5': 2 },
+                purchasePrices: { 'i1': 25, 'i2': 8, 'i3': 5, 'i4': 0.08, 'i5': 0.6 },
+                opening: { 'i1': 50, 'i2': 20 },
+                closing: { 'i1': 40, 'i2': 10 },
+                sales: { 'd1': 400, 'd2': 50, 'd3': 30, 'd_set1': 10, 'd_sub1': 20 }
+            },
+            's2': {
+                purchase: { 'i1': 300, 'i2': 300, 'i3': 300, 'i4': 10, 'i5': 1 },
+                purchasePrices: { 'i1': 28, 'i2': 8.5, 'i3': 5, 'i4': 0.1, 'i5': 0.6 },
+                opening: {},
+                closing: {},
+                sales: { 'd1': 200, 'd2': 20, 'd3': 15, 'd_set1': 5, 'd_sub1': 10 }
+            }
+        };
+
+        const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
+
+        // --- CSV Parser ---
+        const parseCSVRow = (text) => {
+            const result = [];
+            let startValueIndex = 0;
+            let insideQuote = false;
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                if (char === '"') { insideQuote = !insideQuote; } 
+                else if (char === ',' && !insideQuote) {
+                    let val = text.substring(startValueIndex, i).trim();
+                    if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+                    val = val.replace(/""/g, '"');
+                    result.push(val);
+                    startValueIndex = i + 1;
+                }
+            }
+            let val = text.substring(startValueIndex).trim();
+            if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+            val = val.replace(/""/g, '"');
+            result.push(val);
+            return result;
+        };
+
+        const App = () => {
+            // Local State
+            const [ingredients, setIngredients] = useState(() => JSON.parse(localStorage.getItem('hq_ingredients')) || DEFAULT_INGREDIENTS);
+            const [dishes, setDishes] = useState(() => JSON.parse(localStorage.getItem('hq_dishes')) || DEFAULT_DISHES);
+            const [recipes, setRecipes] = useState(() => JSON.parse(localStorage.getItem('hq_recipes')) || DEFAULT_RECIPES);
+            const [stores, setStores] = useState(() => JSON.parse(localStorage.getItem('hq_stores')) || INITIAL_STORES);
+            const [monthlyData, setMonthlyData] = useState(() => {
+                const savedMonthly = localStorage.getItem('hq_monthly_data');
+                if (savedMonthly) return JSON.parse(savedMonthly);
+                const oldStoreData = localStorage.getItem('hq_store_data');
+                const currentM = getCurrentMonth();
+                if (oldStoreData) return { [currentM]: JSON.parse(oldStoreData) };
+                return { [currentM]: INITIAL_STORE_DATA };
+            });
+            const [currentMonth, setCurrentMonth] = useState(getCurrentMonth());
+            const [currentStoreId, setCurrentStoreId] = useState('ALL'); 
+            const [activeTab, setActiveTab] = useState('boss_report');
+            const [ingredientSearch, setIngredientSearch] = useState('');
+            const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+            
+            // Cloud State
+            const [firebaseConfig, setFirebaseConfig] = useState(() => localStorage.getItem('hq_firebase_config') || '');
+            const [db, setDb] = useState(null);
+            const [isCloudConnected, setIsCloudConnected] = useState(false);
+            const [showCloudModal, setShowCloudModal] = useState(false);
+            const [syncStatus, setSyncStatus] = useState('local');
+
+            // Import Modal State
+            const [showImportModal, setShowImportModal] = useState(false);
+            const [importType, setImportType] = useState('ingredients'); 
+            const [importText, setImportText] = useState('');
+            const [importEncoding, setImportEncoding] = useState('UTF-8'); 
+
+            // --- Effects: Cloud Init ---
+            useEffect(() => {
+                if (firebaseConfig && window.FirebaseServices) {
+                    try {
+                        const firestore = window.FirebaseServices.init(firebaseConfig);
+                        setDb(firestore);
+                        setIsCloudConnected(true);
+                        setSyncStatus('connected');
+                    } catch (e) {
+                        console.error("Firebase init error", e);
+                        setSyncStatus('error');
+                    }
+                }
+            }, [firebaseConfig]);
+
+            // --- Effects: Cloud Sync ---
+            useEffect(() => {
+                if (!db) return;
+                const unsub1 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'master_data', (data) => {
+                    if (data.ingredients) setIngredients(data.ingredients);
+                    if (data.dishes) setDishes(data.dishes);
+                    if (data.recipes) setRecipes(data.recipes);
+                    if (data.stores) setStores(data.stores);
+                });
+                const unsub2 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'monthly_data', (data) => {
+                     if (data.data) setMonthlyData(data.data);
+                });
+                return () => { unsub1(); unsub2(); };
+            }, [db]);
+
+            // --- Helper: Persist Data ---
+            const persistData = (type, data) => {
+                if (type === 'ingredients') localStorage.setItem('hq_ingredients', JSON.stringify(data));
+                if (type === 'dishes') localStorage.setItem('hq_dishes', JSON.stringify(data));
+                if (type === 'recipes') localStorage.setItem('hq_recipes', JSON.stringify(data));
+                if (type === 'stores') localStorage.setItem('hq_stores', JSON.stringify(data));
+                if (type === 'monthly') localStorage.setItem('hq_monthly_data', JSON.stringify(data));
+                
+                if (db) {
+                    if (type === 'monthly') window.FirebaseServices.save(db, 'restaurant_hq', 'monthly_data', { data });
+                    else window.FirebaseServices.save(db, 'restaurant_hq', 'master_data', { [type]: data });
+                }
+            };
+
+            const saveIngredients = (newData) => { setIngredients(newData); persistData('ingredients', newData); };
+            const saveDishes = (newData) => { setDishes(newData); persistData('dishes', newData); };
+            const saveRecipes = (newData) => { setRecipes(newData); persistData('recipes', newData); };
+            const saveStores = (newData) => { setStores(newData); persistData('stores', newData); };
+            const saveMonthlyData = (newData) => { setMonthlyData(newData); persistData('monthly', newData); };
+
+            // --- Analysis Logic ---
+            const currentStoreData = useMemo(() => monthlyData[currentMonth] || {}, [monthlyData, currentMonth]);
+
+            const analysis = useMemo(() => {
+                let targetPurchase = {};
+                let targetOpening = {};
+                let targetClosing = {};
+                let targetSales = {};
+                let weightedCosts = {}; 
+                let storeCostMap = {}; 
+
+                if (currentStoreId === 'ALL') {
+                    // Accumulate Quantities & Calculate Weighted Costs
+                    stores.forEach(store => {
+                        const sData = currentStoreData[store.id] || {};
+                        const safeAdd = (target, source) => {
+                            Object.entries(source || {}).forEach(([id, qty]) => { target[id] = (target[id] || 0) + qty; });
+                        };
+                        safeAdd(targetPurchase, sData.purchase);
+                        safeAdd(targetOpening, sData.opening);
+                        safeAdd(targetClosing, sData.closing);
+                        safeAdd(targetSales, sData.sales);
+                    });
+
+                    ingredients.forEach(ing => {
+                        let totalCost = 0;
+                        let totalQty = 0;
+                        stores.forEach(store => {
+                            const sData = currentStoreData[store.id] || {};
+                            const qty = sData.purchase?.[ing.id] || 0;
+                            const price = sData.purchasePrices?.[ing.id] !== undefined ? sData.purchasePrices[ing.id] : ing.unitCost;
+                            const capacity = ing.capacity || 1;
+                            if (qty > 0) {
+                                totalCost += qty * capacity * price;
+                                totalQty += qty * capacity;
+                            }
+                        });
+                        weightedCosts[ing.id] = totalQty > 0 ? (totalCost / totalQty) : ing.unitCost; 
+                    });
+
+                } else {
+                    const sData = currentStoreData[currentStoreId] || {};
+                    targetPurchase = sData.purchase || {};
+                    targetOpening = sData.opening || {};
+                    targetClosing = sData.closing || {};
+                    targetSales = sData.sales || {};
+                    ingredients.forEach(ing => {
+                        storeCostMap[ing.id] = sData.purchasePrices?.[ing.id] !== undefined ? sData.purchasePrices[ing.id] : ing.unitCost;
+                    });
+                }
+
+                const getAppliedUnitCost = (ingId, defaultCost) => {
+                    if (currentStoreId === 'ALL') return weightedCosts[ingId] !== undefined ? weightedCosts[ingId] : defaultCost;
+                    return storeCostMap[ingId] !== undefined ? storeCostMap[ingId] : defaultCost;
+                };
+
+                const relevantDishes = dishes.filter(d => 
+                    currentStoreId === 'ALL' || !d.storeId || d.storeId === 'ALL' || d.storeId === currentStoreId
+                );
+
+                const dishCosts = relevantDishes.map(dish => {
+                    const dishRecipes = recipes.filter(r => r.dishId === dish.id);
+                    let unitCost = 0;
+                    dishRecipes.forEach(r => {
+                        const ing = ingredients.find(i => i.id === r.ingredientId);
+                        if (ing) {
+                            const cost = getAppliedUnitCost(ing.id, ing.unitCost);
+                            unitCost += r.amount * cost;
+                        }
+                    });
+                    const soldQty = targetSales[dish.id] || 0;
+                    const revenue = dish.price * soldQty;
+                    const totalCost = unitCost * soldQty;
+                    const profit = revenue - totalCost;
+                    const marginRate = dish.price > 0 ? ((dish.price - unitCost) / dish.price) * 100 : 0;
+                    return { ...dish, unitCost, soldQty, totalCost, revenue, profit, marginRate };
+                });
+
+                const ingredientUsage = ingredients.map(ing => {
+                    const purchaseQty = targetPurchase[ing.id] || 0;
+                    const openingQty = targetOpening[ing.id] || 0;
+                    const closingQty = targetClosing[ing.id] || 0;
+                    const capacity = ing.capacity || 1;
+                    
+                    const openingQtyBase = openingQty * capacity;
+                    const purchaseQtyBase = purchaseQty * capacity;
+                    const closingQtyBase = closingQty * capacity;
+                    
+                    const actualUsageQtyBase = openingQtyBase + purchaseQtyBase - closingQtyBase;
+                    const appliedUnitCost = getAppliedUnitCost(ing.id, ing.unitCost);
+                    const actualUsageCost = actualUsageQtyBase * appliedUnitCost; 
+                    const totalPurchaseCost = purchaseQtyBase * appliedUnitCost; 
+
+                    let theoreticalQty = 0;
+                    relevantDishes.forEach(dish => {
+                        const r = recipes.find(rec => rec.dishId === dish.id && rec.ingredientId === ing.id);
+                        if (r) {
+                            const soldQty = targetSales[dish.id] || 0;
+                            theoreticalQty += r.amount * soldQty; 
+                        }
+                    });
+
+                    const varianceQty = actualUsageQtyBase - theoreticalQty;
+                    const varianceCost = varianceQty * appliedUnitCost;
+                    const wasteRate = theoreticalQty > 0 ? (varianceQty / theoreticalQty) * 100 : 0;
+                    const avgInventory = (openingQtyBase + closingQtyBase) / 2;
+                    const turnoverRate = avgInventory > 0 ? (actualUsageQtyBase / avgInventory) : 0;
+
+                    let statusText = '正常';
+                    let statusColor = 'text-green-600 bg-green-50 border-green-200';
+                    let advice = '';
+
+                    if (varianceCost > 500 && wasteRate > 15) {
+                        statusText = '🔴 嚴重超耗'; statusColor = 'text-red-700 bg-red-50 border-red-200'; advice = '檢查偷吃/報廢';
+                    } else if (varianceCost > 0 && wasteRate > 5) {
+                        statusText = '🟡 輕度超耗'; statusColor = 'text-yellow-700 bg-yellow-50 border-yellow-200'; advice = '加強標準化';
+                    } else if (turnoverRate > 0 && turnoverRate < 1 && totalPurchaseCost > 2000) {
+                        statusText = '🔵 庫存呆滯'; statusColor = 'text-blue-700 bg-blue-50 border-blue-200'; advice = '減少進貨';
+                    }
+
+                    return { 
+                        ...ing, purchaseQty, openingQty, closingQty, 
+                        actualUsageQtyBase, actualUsageCost, appliedUnitCost,
+                        theoreticalQty, varianceQty, varianceCost, 
+                        totalPurchaseCost, wasteRate, turnoverRate, 
+                        statusText, statusColor, advice 
+                    };
+                });
+
+                const totalRevenue = dishCosts.reduce((acc, d) => acc + d.revenue, 0);
+                const totalPurchaseCost = ingredientUsage.reduce((acc, i) => acc + (i.totalPurchaseCost || 0), 0);
+                const totalActualCost = ingredientUsage.reduce((acc, i) => acc + (i.actualUsageCost || 0), 0);
+                const costRatio = totalRevenue > 0 ? (totalActualCost / totalRevenue) * 100 : 0;
+                const totalTheoreticalCost = dishCosts.reduce((acc, d) => acc + d.totalCost, 0);
+                const theoreticalCostRatio = totalRevenue > 0 ? (totalTheoreticalCost / totalRevenue) * 100 : 0;
+                const costVariance = totalActualCost - totalTheoreticalCost;
+                const varianceRatio = totalRevenue > 0 ? (costVariance / totalRevenue) * 100 : 0;
+
+                const top5Risks = [...ingredientUsage].filter(i => i.varianceCost > 0).sort((a, b) => b.varianceCost - a.varianceCost).slice(0, 5);
+
+                let priceRadar = [];
+                if (currentStoreId === 'ALL') {
+                    priceRadar = ingredients.map(ing => {
+                        const storePrices = stores.map(s => {
+                            const price = currentStoreData[s.id]?.purchasePrices?.[ing.id];
+                            return { id: s.id, name: s.name, price: price || 0 }; 
+                        }).filter(p => p.price > 0);
+                        if (storePrices.length < 2) return null; 
+                        const minPrice = Math.min(...storePrices.map(p => p.price));
+                        const details = storePrices.map(s => {
+                            const diff = s.price - minPrice;
+                            const diffPct = (diff / minPrice) * 100;
+                            return { ...s, diff, diffPct };
+                        }).sort((a, b) => b.diffPct - a.diffPct); 
+                        const maxDiff = details[0].diffPct;
+                        return { ing, minPrice, details, maxDiff };
+                    }).filter(Boolean).sort((a, b) => b.maxDiff - a.maxDiff);
+                }
+
+                return { 
+                    dishCosts, ingredientUsage, totalRevenue, totalPurchaseCost, totalActualCost, costRatio, 
+                    totalTheoreticalCost, theoreticalCostRatio, costVariance, varianceRatio,
+                    top5Risks, priceRadar
+                };
+            }, [ingredients, dishes, recipes, stores, currentStoreData, currentStoreId]);
+
+            // --- Handlers ---
+            const updateStoreData = (storeId, type, itemId, val) => {
+                const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
+                if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
+                if (!newMonthlyData[currentMonth][storeId]) newMonthlyData[currentMonth][storeId] = {};
+                if (!newMonthlyData[currentMonth][storeId][type]) newMonthlyData[currentMonth][storeId][type] = {};
+                newMonthlyData[currentMonth][storeId][type][itemId] = parseFloat(val) || 0;
+                saveMonthlyData(newMonthlyData);
+            };
+
+            const addStore = () => {
+                const name = prompt("請輸入新門市名稱：");
+                if (name) {
+                    const newId = `s${Date.now()}`;
+                    saveStores([...stores, { id: newId, name }]);
+                    const newMonthlyData = { ...monthlyData };
+                    if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
+                    newMonthlyData[currentMonth][newId] = {};
+                    saveMonthlyData(newMonthlyData);
+                    setCurrentStoreId(newId);
+                }
+            };
+            const deleteStore = (id) => { if (confirm("確定刪除？")) { saveStores(stores.filter(s => s.id !== id)); setCurrentStoreId('ALL'); }};
+            const updateIngredient = (id, field, val) => saveIngredients(ingredients.map(i => i.id === id ? { ...i, [field]: (field === 'name' || field === 'unit' || field === 'baseUnit' || field === 'alias' || field === 'note') ? val : parseFloat(val) || 0 } : i));
+            const updateDish = (id, field, val) => saveDishes(dishes.map(d => d.id === id ? { ...d, [field]: field === 'price' ? parseFloat(val)||0 : val } : d));
+            const addDish = () => saveDishes([...dishes, { id: `d${Date.now()}`, name: "新菜品", price: 0, storeId: 'ALL' }]);
+            const deleteDish = (id) => saveDishes(dishes.filter(d => d.id !== id));
+            const addIngredientToDish = (dishId, ingredientId) => { if (!recipes.find(r => r.dishId === dishId && r.ingredientId === ingredientId)) saveRecipes([...recipes, { dishId, ingredientId, amount: 1 }]); };
+            const updateRecipeAmount = (dishId, ingredientId, val) => { saveRecipes(recipes.map(r => (r.dishId === dishId && r.ingredientId === ingredientId) ? { ...r, amount: parseFloat(val) || 0 } : r)); };
+            const removeRecipeItem = (dishId, ingredientId) => saveRecipes(recipes.filter(r => !(r.dishId === dishId && r.ingredientId === ingredientId)));
+            const handleSaveCloudConfig = () => { localStorage.setItem('hq_firebase_config', firebaseConfig); setShowCloudModal(false); window.location.reload(); };
+
+            const openImportModal = (type) => { 
+                if (currentStoreId === 'ALL' && type !== 'ingredients') { alert('請先選擇分店！'); return; }
+                setImportType(type); setImportText(''); setImportEncoding('UTF-8'); setShowImportModal(true); 
+            };
+            const handleFileRead = (e) => { const file = e.target.files[0]; if(!file)return; const r=new FileReader(); r.onload=(ev)=>setImportText(ev.target.result); r.readAsText(file,importEncoding); e.target.value=''; };
+            
+            const handleBulkImport = () => {
+                if (!importText.trim()) return;
+                const lines = importText.split('\n').filter(l => l.trim() !== '');
+                let successCount = 0;
+                let newItemCount = 0;
+
+                if (importType === 'purchase') {
+                    let newIngredientsToAdd = [];
+                    let updates = {};
+                    let costUpdates = {};
+                    lines.forEach(line => {
+                        const parts = parseCSVRow(line);
+                        if (parts.length >= 2) {
+                            const name = parts[0].trim();
+                            const qty = parseFloat(parts[1].replace(/,/g, ''));
+                            const amount = parts[2] ? parseFloat(parts[2].replace(/,/g, '')) : 0;
+                            if (!name || isNaN(qty)) return;
+                            let ing = ingredients.find(i => i.name === name || i.alias === name) || newIngredientsToAdd.find(i => i.name === name);
+                            if (!ing) {
+                                ing = { id: `i_auto_${Date.now()}_${newItemCount}`, name: name, unit: '單位', capacity: 1, baseUnit: '單位', unitCost: 0, alias: '' };
+                                newIngredientsToAdd.push(ing);
+                                newItemCount++;
+                            }
+                            updates[ing.id] = (updates[ing.id] || 0) + qty;
+                            if (amount > 0 && qty > 0) {
+                                const costPerPack = amount / qty;
+                                const capacity = ing.capacity || 1;
+                                costUpdates[ing.id] = costPerPack / capacity; 
+                            }
+                            successCount++;
+                        }
+                    });
+                    if (newIngredientsToAdd.length > 0) saveIngredients([...ingredients, ...newIngredientsToAdd]);
+                    if (Object.keys(costUpdates).length > 0) {
+                        saveIngredients(ingredients.map(ing => costUpdates[ing.id] ? { ...ing, unitCost: costUpdates[ing.id] } : ing));
+                    }
+                    const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
+                    if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
+                    if (!newMonthlyData[currentMonth][currentStoreId]) newMonthlyData[currentMonth][currentStoreId] = {};
+                    if (!newMonthlyData[currentMonth][currentStoreId].purchase) newMonthlyData[currentMonth][currentStoreId].purchase = {};
+                    if (!newMonthlyData[currentMonth][currentStoreId].purchasePrices) newMonthlyData[currentMonth][currentStoreId].purchasePrices = {};
+                    Object.entries(updates).forEach(([id, qty]) => { newMonthlyData[currentMonth][currentStoreId].purchase[id] = qty; });
+                    Object.entries(costUpdates).forEach(([id, price]) => { newMonthlyData[currentMonth][currentStoreId].purchasePrices[id] = price; });
+                    saveMonthlyData(newMonthlyData);
+
+                } else if (importType === 'sales') {
+                    let nameIdx = -1; let qtyIdx = -1;
+                    let newDishesToAdd = [];
+                    let updates = {};
+                    for (let i = 0; i < Math.min(lines.length, 5); i++) {
+                        const parts = parseCSVRow(lines[i]);
+                        parts.forEach((col, idx) => {
+                             if (['名稱','品名','商品','Name'].some(k => col.includes(k))) nameIdx = idx;
+                             if (['數量','銷量','Qty','Quantity'].some(k => col.includes(k))) qtyIdx = idx;
+                        });
+                        if (nameIdx !== -1 && qtyIdx !== -1) break;
+                    }
+                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; }
+                    lines.forEach((line) => {
+                        const parts = parseCSVRow(line);
+                        if (parts.length > Math.max(nameIdx, qtyIdx)) {
+                            const name = parts[nameIdx].trim();
+                            // Fixed: qty variable name clash resolved
+                            const quantityVal = parseFloat(parts[qtyIdx].replace(/,/g, ''));
+                            if (['名稱','品名'].some(k => name.includes(k)) || isNaN(quantityVal)) return;
+                            let dish = dishes.find(d => d.name === name) || newDishesToAdd.find(d => d.name === name);
+                            if (!dish) {
+                                dish = { id: `d_auto_${Date.now()}_${newItemCount}`, name: name, price: 0, storeId: 'ALL' };
+                                newDishesToAdd.push(dish);
+                                newItemCount++;
+                            }
+                            updates[dish.id] = (updates[dish.id] || 0) + quantityVal;
+                            successCount++;
+                        }
+                    });
+                    if (newDishesToAdd.length > 0) saveDishes([...dishes, ...newDishesToAdd]);
+                    const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
+                    if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
+                    if (!newMonthlyData[currentMonth][currentStoreId]) newMonthlyData[currentMonth][currentStoreId] = {};
+                    if (!newMonthlyData[currentMonth][currentStoreId].sales) newMonthlyData[currentMonth][currentStoreId].sales = {};
+                    Object.entries(updates).forEach(([id, qty]) => { newMonthlyData[currentMonth][currentStoreId].sales[id] = qty; });
+                    saveMonthlyData(newMonthlyData);
+
+                } else if (importType === 'ingredients') {
+                     const newIngredients = [];
+                    lines.forEach(line => {
+                        const parts = parseCSVRow(line);
+                        if (parts.length >= 2 && !['名稱','Name'].includes(parts[0])) {
+                            newIngredients.push({ id: `i_imp_${Date.now()}_${successCount}`, name: parts[0], unit: parts[1] || '單位', unitCost: parseFloat(parts[2]) || 0, alias: '', capacity: 1, baseUnit: parts[1] || '單位' });
+                            successCount++;
+                        }
+                    });
+                    if (newIngredients.length > 0) saveIngredients([...ingredients, ...newIngredients]);
+                }
+                alert(`匯入完成！成功：${successCount} 筆`);
+                setShowImportModal(false);
+            };
+
+            const handleExport = () => {
+                const BOM = "\uFEFF"; 
+                let csvContent = BOM;
+                const storeName = currentStoreId === 'ALL' ? '總部匯總' : stores.find(s => s.id === currentStoreId)?.name || 'Unknown';
+                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v4.6) ---\n`;
+                csvContent += "食材名稱,採購單位,換算,基礎單位,應用均價,期初(入),進貨(入),期末(入),實際耗用(基),理論耗用(基),差異$,狀態\n";
+                analysis.ingredientUsage.forEach(row => {
+                    csvContent += `${row.name},${row.unit},${row.capacity},${row.baseUnit},${row.appliedUnitCost.toFixed(4)},${row.openingQty},${row.purchaseQty},${row.closingQty},${row.actualUsageQtyBase.toFixed(1)},${row.theoreticalQty.toFixed(1)},${row.varianceCost.toFixed(0)},${row.statusText}\n`;
+                });
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.setAttribute("download", `${storeName}_${currentMonth}_分析報表.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            // Filters
+            const inputVisibleDishes = useMemo(() => dishes.filter(d => currentStoreId === 'ALL' || !d.storeId || d.storeId === 'ALL' || d.storeId === currentStoreId), [dishes, currentStoreId]);
+            const filteredIngredients = useMemo(() => ingredients.filter(i => i.name.includes(ingredientSearch) || (i.alias && i.alias.includes(ingredientSearch))), [ingredients, ingredientSearch]);
+
+            return (
+                <div className="min-h-screen flex flex-col md:flex-row">
+                    {/* Mobile Menu Button */}
+                    <div className="md:hidden bg-stone-900 text-white p-4 flex justify-between items-center z-50 fixed w-full top-0">
+                        <div className="font-bold flex items-center gap-2"><Icon name="Store" className="text-orange-500" /> 總部戰情</div>
+                        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Icon name="Menu" size={24} /></button>
+                    </div>
+
+                    {isSidebarOpen && <div className="mobile-menu-overlay" onClick={() => setIsSidebarOpen(false)}></div>}
+
+                    <div className={`sidebar bg-stone-800 text-stone-200 w-64 flex-shrink-0 flex flex-col pt-16 md:pt-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+                        <div className="p-4 bg-stone-900 hidden md:flex items-center gap-2">
+                            <Icon name="Store" className="text-orange-500" />
+                            <h1 className="font-bold text-lg">總部戰情中心</h1>
+                        </div>
+                        <div className="px-4 py-2 border-b border-stone-700 bg-stone-800">
+                            <div className="flex items-center justify-between mb-2">
+                                <label className="text-xs text-stone-500 font-bold uppercase">連線狀態</label>
+                                {isCloudConnected ? <span className="text-xs text-green-400 font-bold flex items-center gap-1"><Icon name="Cloud" size={12}/> 線上</span> : <span className="text-xs text-stone-500 flex items-center gap-1"><Icon name="CloudOff" size={12}/> 離線</span>}
+                            </div>
+                            <button onClick={() => setShowCloudModal(true)} className="w-full text-xs bg-stone-700 hover:bg-stone-600 text-stone-300 py-1 rounded transition-colors mb-4">設定雲端資料庫</button>
+                            <label className="text-xs text-stone-500 font-bold uppercase block mb-1">選擇月份</label>
+                            <div className="relative"><Icon name="Calendar" size={16} className="absolute left-2 top-2.5 text-stone-400" /><input type="month" value={currentMonth} onChange={(e) => setCurrentMonth(e.target.value)} className="w-full bg-stone-700 text-white text-sm rounded pl-8 pr-2 py-2 border border-stone-600 focus:border-orange-500 outline-none" /></div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                            <button onClick={() => { setCurrentStoreId('ALL'); setIsSidebarOpen(false); }} className={`w-full text-left px-3 py-2 rounded-md flex items-center justify-between ${currentStoreId === 'ALL' ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-stone-700'}`}><span className="font-bold">🌏 總部匯總 (All)</span></button>
+                            <div className="text-xs text-stone-500 px-2 py-1 mt-4 uppercase font-bold tracking-wider flex justify-between items-center"><span>各門市數據</span><button onClick={addStore} className="hover:text-white" title="新增門市"><Icon name="Plus" size={14} /></button></div>
+                            {stores.map(store => (
+                                <div key={store.id} className="group relative">
+                                    <button onClick={() => { setCurrentStoreId(store.id); setIsSidebarOpen(false); }} className={`w-full text-left px-3 py-2 rounded-md flex items-center justify-between ${currentStoreId === store.id ? 'bg-stone-700 text-white border-l-4 border-orange-500' : 'hover:bg-stone-700 text-stone-400'}`}><span>{store.name}</span></button>
+                                    {currentStoreId === store.id && <button onClick={(e) => { e.stopPropagation(); deleteStore(store.id); }} className="absolute right-2 top-2 text-stone-500 hover:text-red-400"><Icon name="Trash2" size={14} /></button>}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <div className="flex-1 bg-stone-50 h-screen overflow-y-auto pt-16 md:pt-0">
+                        <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6">
+                            {/* Header */}
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                <div>
+                                    <h2 className="text-2xl font-bold text-stone-800 flex items-center gap-2">{currentStoreId === 'ALL' ? '🌏 全品牌營運總覽' : `🏠 ${stores.find(s => s.id === currentStoreId)?.name} - 營運分析`}<span className="text-sm font-normal text-stone-500 bg-stone-200 px-2 py-1 rounded ml-2">{currentMonth}</span></h2>
+                                    <p className="text-stone-500 text-sm mt-1">{currentStoreId === 'ALL' ? '全品牌營收與成本匯總。' : '單店進銷存與毛利分析。'}</p>
+                                </div>
+                                <div className="flex gap-2"><button onClick={handleExport} className="btn-primary bg-green-600 hover:bg-green-700"><Icon name="Download" size={16} /> 匯出報表</button></div>
+                            </div>
+
+                            {/* Tabs */}
+                            <div className="flex border-b border-stone-200 overflow-x-auto">
+                                {[{id: 'boss_report', label: '📊 戰情儀表板', icon: 'ClipboardList'}, {id: 'data_input', label: '📝 進銷存輸入', icon: 'FileText'}, {id: 'settings', label: '⚙️ 歸戶與配方', icon: 'ChefHat'}].map(tab => (
+                                    <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-6 py-3 border-b-2 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === tab.id ? 'border-orange-500 text-orange-600' : 'border-transparent text-stone-500 hover:text-stone-700'}`}><Icon name={tab.icon} size={16} /> {tab.label}</button>
+                                ))}
+                            </div>
+
+                            <div className="fade-in">
+                                {activeTab === 'boss_report' && (
+                                    <div className="space-y-6">
+                                        {/* Price Radar (Only in ALL mode) */}
+                                        {currentStoreId === 'ALL' && (
+                                            <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6 border-l-4 border-l-purple-500">
+                                                <h3 className="font-bold text-stone-800 mb-4 flex items-center gap-2"><Icon name="Radar" className="text-purple-600" /> 採購比價雷達 (Price Radar)</h3>
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-sm text-left">
+                                                        <thead className="bg-purple-50 text-purple-900 font-bold">
+                                                            <tr>
+                                                                <th className="p-3 rounded-tl-lg min-w-[150px]">標準食材</th>
+                                                                <th className="p-3 text-right min-w-[100px]">最低進價</th>
+                                                                {stores.map(s => <th key={s.id} className="p-3 text-right min-w-[100px]">{s.name}</th>)}
+                                                                <th className="p-3 rounded-tr-lg">狀態</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-purple-100">
+                                                            {analysis.priceRadar.length === 0 && <tr><td colSpan={3 + stores.length} className="p-4 text-center text-stone-400">尚無比價數據</td></tr>}
+                                                            {analysis.priceRadar.map((row, idx) => (
+                                                                <tr key={idx} className="hover:bg-purple-50/50">
+                                                                    <td className="p-3 font-medium">{row.ing.name} <span className="text-xs text-stone-400">({row.ing.baseUnit})</span></td>
+                                                                    <td className="p-3 text-right font-bold text-green-600">${row.minPrice.toFixed(3)}</td>
+                                                                    {stores.map(s => {
+                                                                        const detail = row.details.find(d => d.id === s.id);
+                                                                        if (!detail) return <td key={s.id} className="p-3 text-right text-stone-300">-</td>;
+                                                                        return (
+                                                                            <td key={s.id} className="p-3 text-right">
+                                                                                <div className={detail.diffPct > 10 ? "text-red-600 font-bold" : "text-stone-600"}>${detail.price.toFixed(3)}</div>
+                                                                                {detail.diffPct > 10 && <div className="text-[10px] text-red-400">+{detail.diffPct.toFixed(0)}%</div>}
+                                                                            </td>
+                                                                        );
+                                                                    })}
+                                                                    <td className="p-3">{row.maxDiff > 20 ? <span className="badge bg-red-100 text-red-600">價差大</span> : <span className="badge bg-green-100 text-green-600">正常</span>}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {/* Cost Performance */}
+                                        <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6">
+                                            <h3 className="font-bold text-stone-800 mb-4 flex items-center gap-2"><Icon name="Activity" className="text-purple-500" /> 成本效能分析</h3>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
+                                                <div className="p-4 bg-gray-50 rounded-lg">
+                                                    <div className="text-xs text-gray-500 mb-1">理論成本 (Standard)</div>
+                                                    <div className="text-xl font-bold text-gray-800">${analysis.totalTheoreticalCost.toLocaleString()}</div>
+                                                    <div className="text-xs text-blue-600 font-medium">{analysis.theoreticalCostRatio.toFixed(1)}% of Rev</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-50 rounded-lg">
+                                                    <div className="text-xs text-gray-500 mb-1">實際耗用 (Actual)</div>
+                                                    <div className="text-xl font-bold text-gray-800">${analysis.totalActualCost.toLocaleString()}</div>
+                                                    <div className={`text-xs font-medium ${analysis.costRatio > 35 ? 'text-red-600' : 'text-green-600'}`}>{analysis.costRatio.toFixed(1)}% of Rev</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-50 rounded-lg">
+                                                    <div className="text-xs text-gray-500 mb-1">管理差異 (Variance)</div>
+                                                    <div className={`text-xl font-bold ${analysis.costVariance > 0 ? 'text-red-600' : 'text-green-600'}`}>{analysis.costVariance > 0 ? '+' : ''}{analysis.costVariance.toLocaleString()}</div>
+                                                    <div className="text-xs text-gray-500">{analysis.varianceRatio.toFixed(1)}% 差距</div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+                                            <div className="px-6 py-4 border-b border-stone-100 bg-red-50 flex items-center gap-2"><Icon name="AlertTriangle" className="text-red-600" /><h3 className="font-bold text-red-900">異常耗損排行 (Top 5)</h3></div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm text-left">
+                                                    <thead className="bg-red-100/50 text-red-800"><tr><th className="px-6 py-3 min-w-[120px]">食材</th><th className="px-6 py-3 text-right">實際耗用</th><th className="px-6 py-3 text-right">理論耗用</th><th className="px-6 py-3 text-right">浪費金額</th><th className="px-6 py-3 text-right text-stone-500">平均進價</th><th className="px-6 py-3 text-center">庫存周轉率</th><th className="px-6 py-3">建議</th></tr></thead>
+                                                    <tbody className="divide-y divide-red-50">
+                                                        {analysis.top5Risks.map(item => (
+                                                            <tr key={item.id} className="hover:bg-red-50/30">
+                                                                <td className="px-6 py-4 font-bold">{item.name}</td>
+                                                                <td className="px-6 py-4 text-right font-mono">{item.actualUsageQtyBase.toFixed(1)} {item.baseUnit}</td>
+                                                                <td className="px-6 py-4 text-right font-mono text-stone-500">{item.theoreticalQty.toFixed(1)} {item.baseUnit}</td>
+                                                                <td className="px-6 py-4 text-right font-bold text-red-600">${item.varianceCost.toLocaleString()}</td>
+                                                                <td className="px-6 py-4 text-right text-xs text-stone-500">${item.appliedUnitCost.toFixed(2)}/{item.baseUnit}</td>
+                                                                <td className="px-6 py-4 text-center">
+                                                                    <span className={`px-2 py-1 rounded text-xs ${item.turnoverRate < 1 ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                                                                        {item.turnoverRate.toFixed(1)}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-6 py-4 text-stone-600">{item.advice}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'data_input' && (
+                                    <div className="space-y-6">
+                                        {currentStoreId === 'ALL' ? (
+                                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-8 text-center"><Icon name="AlertTriangle" className="mx-auto text-yellow-500 mb-2" size={32} /><h3 className="text-lg font-bold text-yellow-800">目前是「總部匯總」模式</h3><p className="text-yellow-700 mt-2">請從左側選單選擇一間「特定分店」，才能輸入該分店的數據。</p></div>
+                                        ) : (
+                                            <div className="grid grid-cols-1 gap-6">
+                                                <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+                                                    <div className="px-6 py-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
+                                                        <div><h3 className="font-bold text-blue-900">📦 進銷存數據輸入</h3><p className="text-xs text-blue-600">期初 + 進貨 - 期末 = 耗用</p></div>
+                                                        <button onClick={() => openImportModal('purchase')} className="btn-outline text-blue-600 border-blue-200 hover:bg-blue-50"><Icon name="Upload" size={14} /> 匯入 ERP</button>
+                                                    </div>
+                                                    <div className="p-4 max-h-[60vh] overflow-y-auto">
+                                                        <table className="w-full text-sm">
+                                                            <thead className="bg-stone-50 text-stone-500 font-bold">
+                                                                <tr>
+                                                                    <th className="p-2 text-left min-w-[120px]">食材名稱</th>
+                                                                    <th className="p-2 text-right">期初</th>
+                                                                    <th className="p-2 text-center text-stone-300">+</th>
+                                                                    <th className="p-2 text-right">進貨</th>
+                                                                    <th className="p-2 text-center text-stone-300">-</th>
+                                                                    <th className="p-2 text-right">期末</th>
+                                                                    <th className="p-2 text-center text-stone-300">=</th>
+                                                                    <th className="p-2 text-right text-blue-600">耗用</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-stone-100">
+                                                                {ingredients.map(ing => {
+                                                                    const sData = currentStoreData[currentStoreId] || {};
+                                                                    const open = sData.opening?.[ing.id] || 0;
+                                                                    const pur = sData.purchase?.[ing.id] || 0;
+                                                                    const close = sData.closing?.[ing.id] || 0;
+                                                                    const used = open + pur - close;
+                                                                    return (
+                                                                        <tr key={ing.id} className="hover:bg-stone-50">
+                                                                            <td className="p-2 font-medium">{ing.name} <div className="text-[10px] text-stone-400">{ing.alias}</div></td>
+                                                                            <td className="p-2"><input type="number" className="input-cell" value={open} onChange={(e) => updateStoreData(currentStoreId, 'opening', ing.id, e.target.value)} /></td>
+                                                                            <td className="p-2 text-center text-stone-300">+</td>
+                                                                            <td className="p-2"><input type="number" className="input-cell bg-blue-50/50 border-blue-200" value={pur} onChange={(e) => updateStoreData(currentStoreId, 'purchase', ing.id, e.target.value)} /></td>
+                                                                            <td className="p-2 text-center text-stone-300">-</td>
+                                                                            <td className="p-2"><input type="number" className="input-cell bg-green-50/50 border-green-200" value={close} onChange={(e) => updateStoreData(currentStoreId, 'closing', ing.id, e.target.value)} /></td>
+                                                                            <td className="p-2 text-center text-stone-300">=</td>
+                                                                            <td className="p-2 text-right font-bold text-blue-700">{used}</td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                                <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
+                                                    <div className="px-6 py-4 bg-green-50 border-b border-green-100 flex justify-between items-center">
+                                                        <div><h3 className="font-bold text-green-900">🍽️ 銷售數據</h3></div>
+                                                        <button onClick={() => openImportModal('sales')} className="btn-outline text-green-600 border-green-200 hover:bg-green-50"><Icon name="Upload" size={14} /> 匯入 POS</button>
+                                                    </div>
+                                                    <div className="p-4 space-y-2 max-h-[60vh] overflow-y-auto">
+                                                        {inputVisibleDishes.map(dish => (
+                                                            <div key={dish.id} className="flex justify-between items-center p-2 hover:bg-stone-50 rounded border border-transparent hover:border-stone-200">
+                                                                <div><div className="font-medium">{dish.name}</div><div className="text-xs text-stone-400">${dish.price}</div></div>
+                                                                <input type="number" className="w-24 text-right border border-stone-300 rounded px-2 py-1 focus:ring-2 focus:ring-green-500 outline-none" value={currentStoreData[currentStoreId]?.sales?.[dish.id] || 0} onChange={(e) => updateStoreData(currentStoreId, 'sales', dish.id, e.target.value)} />
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {activeTab === 'settings' && (
+                                    <div className="space-y-6">
+                                        <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6">
+                                            <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="font-bold text-lg text-stone-800">總部統一食材庫</h3><button onClick={() => openImportModal('ingredients')} className="btn-outline"><Icon name="Upload" size={16} /> 批次匯入</button></div>
+                                            <div className="space-y-2 mb-4 overflow-x-auto">
+                                                <div className="grid grid-cols-12 gap-2 text-xs font-bold text-stone-500 px-1 mb-2 min-w-[800px]">
+                                                    <div className="col-span-2">系統名稱</div>
+                                                    <div className="col-span-2">ERP 別名</div>
+                                                    <div className="col-span-1">採購單位</div>
+                                                    <div className="col-span-2 text-center bg-yellow-50 rounded">換算</div>
+                                                    <div className="col-span-1">基礎單位</div>
+                                                    <div className="col-span-2 text-right">基礎單價</div>
+                                                    <div className="col-span-2">備註</div>
+                                                </div>
+                                                {ingredients.map(ing => (
+                                                    <div key={ing.id} className="grid grid-cols-12 gap-2 items-center min-w-[800px] border-b pb-1 last:border-0">
+                                                        <input value={ing.name} onChange={(e) => updateIngredient(ing.id, 'name', e.target.value)} className="col-span-2 border p-1 rounded font-bold" />
+                                                        <input value={ing.alias || ''} onChange={(e) => updateIngredient(ing.id, 'alias', e.target.value)} className="col-span-2 border p-1 rounded bg-stone-50" />
+                                                        <input value={ing.unit} onChange={(e) => updateIngredient(ing.id, 'unit', e.target.value)} className="col-span-1 border p-1 rounded text-center" />
+                                                        <input type="number" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} className="col-span-2 border p-1 rounded text-center bg-yellow-50" />
+                                                        <input value={ing.baseUnit || '單位'} onChange={(e) => updateIngredient(ing.id, 'baseUnit', e.target.value)} className="col-span-1 border p-1 rounded text-center" />
+                                                        <input type="number" value={ing.unitCost} onChange={(e) => updateIngredient(ing.id, 'unitCost', e.target.value)} className="col-span-2 border p-1 rounded text-right" />
+                                                        <input value={ing.note || ''} onChange={(e) => updateIngredient(ing.id, 'note', e.target.value)} className="col-span-2 border p-1 rounded text-xs" />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6">
+                                            <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="font-bold text-lg text-stone-800">菜單與配方設定</h3><button onClick={addDish} className="btn-primary bg-blue-600 hover:bg-blue-700"><Icon name="Plus" size={16} /> 新增菜品</button></div>
+                                            
+                                            {/* 搜尋列 */}
+                                            <div className="mb-4 flex items-center gap-2 bg-stone-100 p-2 rounded-lg">
+                                                <Icon name="Search" className="text-stone-400" />
+                                                <input placeholder="搜尋食材以新增配方..." className="bg-transparent outline-none w-full text-sm" value={ingredientSearch} onChange={(e) => setIngredientSearch(e.target.value)} />
+                                            </div>
+
+                                            <div className="space-y-8">
+                                                {dishes.map(dish => (
+                                                    <div key={dish.id} className="border-b border-stone-100 pb-6 last:border-0 last:pb-0">
+                                                        <div className="grid grid-cols-12 gap-2 items-center hover:bg-stone-50 p-1 rounded mb-2">
+                                                            <div className="col-span-4"><input value={dish.name} onChange={(e) => updateDish(dish.id, 'name', e.target.value)} className="w-full font-bold text-stone-800 border-none bg-transparent" /></div>
+                                                            <div className="col-span-2"><input type="number" value={dish.price} onChange={(e) => updateDish(dish.id, 'price', e.target.value)} className="w-full border p-1 rounded text-sm text-right" /></div>
+                                                            <div className="col-span-4"><select value={dish.storeId || 'ALL'} onChange={(e) => updateDish(dish.id, 'storeId', e.target.value)} className="text-sm p-1 border rounded w-full"><option value="ALL">🌏 全門市</option>{stores.map(s => <option key={s.id} value={s.id}>🏠 {s.name}</option>)}</select></div>
+                                                            <div className="col-span-2 text-center"><button onClick={() => deleteDish(dish.id)} className="text-stone-400 hover:text-red-500 p-1"><Icon name="Trash2" size={16} /></button></div>
+                                                        </div>
+                                                        <div className="space-y-2 pl-4 border-l-2 border-stone-200 ml-2">
+                                                            {recipes.filter(r => r.dishId === dish.id).map((recipe, idx) => {
+                                                                const ing = ingredients.find(i => i.id === recipe.ingredientId);
+                                                                if (!ing) return null;
+                                                                return (
+                                                                    <div key={idx} className="flex items-center gap-4 text-sm group">
+                                                                        <span className="w-48 truncate font-medium text-stone-600">{ing.name}</span>
+                                                                        <div className="flex items-center gap-2">
+                                                                            <input type="number" className="w-20 text-right border border-stone-200 rounded px-2 py-1 focus:ring-1 focus:ring-green-500 outline-none" value={recipe.amount} onChange={(e) => updateRecipeAmount(dish.id, ing.id, e.target.value)} />
+                                                                            <span className="text-stone-500 w-10">{ing.baseUnit}</span>
+                                                                        </div>
+                                                                        <button onClick={() => removeRecipeItem(dish.id, ing.id)} className="text-stone-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity"><Icon name="Trash2" size={14} /></button>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                            <div className="mt-3 flex items-center gap-2">
+                                                                <select className="text-sm border border-stone-200 rounded px-3 py-1.5 bg-stone-50 outline-none focus:border-green-500 w-64" onChange={(e) => { if (e.target.value) { addIngredientToDish(dish.id, e.target.value); e.target.value = ''; } }}>
+                                                                    <option value="">+ 添加食材 (已過濾)</option>
+                                                                    {filteredIngredients.map(ing => ( <option key={ing.id} value={ing.id}>{ing.name} ({ing.alias || '無別名'})</option> ))}
+                                                                </select>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Cloud Modal */}
+                    {showCloudModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
+                                <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="Cloud" /> 設定雲端資料庫 (Firebase)</h3>
+                                <p className="text-sm text-stone-500 mb-4">請貼上您的 Firebase Config (JSON 格式) 以啟用即時協作功能。</p>
+                                <textarea className="w-full h-32 border rounded p-2 text-xs font-mono mb-4" value={firebaseConfig} onChange={(e) => setFirebaseConfig(e.target.value)} placeholder='{ "apiKey": "AIza...", ... }' />
+                                <div className="flex justify-end gap-2">
+                                    <button onClick={() => setShowCloudModal(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded">取消</button>
+                                    <button onClick={handleSaveCloudConfig} className="btn-primary bg-blue-600">儲存並連線</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Import Modal */}
+                    {showImportModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden">
+                                <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                    <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icon name="FileText" className="text-blue-600" size={20}/> 匯入資料</h3>
+                                    <button onClick={() => setShowImportModal(false)} className="text-gray-400 hover:text-gray-600"><Icon name="X" size={20} /></button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <div className="flex items-center gap-2">
+                                        <label className="bg-white border border-stone-300 text-stone-600 text-sm px-3 py-1.5 rounded cursor-pointer hover:bg-stone-50 flex items-center gap-2"><Icon name="Upload" size={14} /> 選擇 CSV<input type="file" accept=".csv,.txt" className="hidden" onChange={handleFileRead} /></label>
+                                        <select value={importEncoding} onChange={(e) => setImportEncoding(e.target.value)} className="border border-stone-300 rounded text-xs p-1"><option value="UTF-8">UTF-8</option><option value="Big5">Big5</option></select>
+                                    </div>
+                                    <textarea className="w-full h-64 p-4 border border-gray-200 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={importText} onChange={(e) => setImportText(e.target.value)} />
+                                </div>
+                                <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+                                    <button onClick={() => setShowImportModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors">取消</button>
+                                    <button onClick={handleBulkImport} className="btn-primary bg-blue-600 hover:bg-blue-700">確認匯入</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
