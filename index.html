@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v5.5 單位換算版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v5.6.1 單位修正版)</title>
     
     <!-- 1. 引入 React 和 Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -22,12 +22,24 @@
                     let configStr = rawConfig.trim();
                     if (configStr.indexOf('=') > -1) configStr = configStr.substring(configStr.indexOf('=') + 1).trim();
                     if (configStr.endsWith(';')) configStr = configStr.slice(0, -1);
-                    const config = new Function("return " + configStr)();
-                    if (!firebase.apps.length) firebase.initializeApp(config);
+                    // 寬容解析 JSON (處理 key 沒有引號的情況)
+                    const jsonStr = configStr.replace(/(\w+)(?=:)/g, '"$1"').replace(/'/g, '"');
+                    const config = JSON.parse(jsonStr);
+
+                    if (!firebase.apps.length) {
+                        firebase.initializeApp(config);
+                    }
                     return firebase.firestore();
                 } catch (e) {
-                    console.error("Firebase Init Error:", e);
-                    throw new Error("設定碼格式錯誤");
+                    console.error("Firebase Parsing/Init Error:", e);
+                    // Fallback: try evaluate if simple JSON parse fails
+                    try {
+                         const config = new Function("return " + rawConfig.trim().replace(/const\s+\w+\s*=\s*/, "").replace(/;$/, ""))();
+                         if (!firebase.apps.length) firebase.initializeApp(config);
+                         return firebase.firestore();
+                    } catch (e2) {
+                        throw new Error("設定碼格式錯誤，請確認複製內容。");
+                    }
                 }
             },
             subscribe: (db, collection, docId, callback) => {
@@ -103,24 +115,19 @@
         };
 
         // --- 預設數據 ---
-        // 修正：預設值加入 capacity: 1 以防錯誤
         const DEFAULT_INGREDIENTS = [
-            { id: 'i1', name: "[A001] 漢堡肉排", alias: "冷凍牛肉餅(箱)", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
+            { id: 'i1', name: "範例: [A001] 漢堡肉排", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
         ];
-
         const DEFAULT_DISHES = [
-            { id: 'd1', name: "經典起司堡", price: 150, storeId: 'ALL' }
+            { id: 'd1', name: "範例: 經典起司堡", price: 150, storeId: 'ALL' }
         ];
-
         const DEFAULT_RECIPES = [
             { dishId: 'd1', ingredientId: 'i1', amount: 1 }
         ];
-
         const INITIAL_STORES = [
             { id: 's1', name: '台北總店' },
             { id: 's2', name: '高雄分店' }
         ];
-
         const INITIAL_STORE_DATA = {
             's1': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} },
             's2': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} }
@@ -151,6 +158,35 @@
             return result;
         };
 
+        // 單位偵測 (修正版：優先看 Unit，再看 Name)
+        const detectCapacity = (name, unit) => {
+            let capacity = 1;
+            let baseUnit = unit || '單位';
+            
+            const u = (unit || "").trim().toLowerCase();
+            
+            // 1. 強制鎖定標準單位
+            if (u === 'kg' || u === '公斤' || u === 'kilogram') { return { capacity: 1000, baseUnit: 'g' }; }
+            if (u === 'g' || u === '公克' || u === 'gram') { return { capacity: 1, baseUnit: 'g' }; }
+            if (u === 'l' || u === '公升' || u === 'liter') { return { capacity: 1000, baseUnit: 'ml' }; }
+            if (u === 'ml' || u === '毫升' || u === 'cc') { return { capacity: 1, baseUnit: 'ml' }; }
+            if (u === 'lb' || u === '磅' || u === 'pound') { return { capacity: 454, baseUnit: 'g' }; }
+
+            // 2. 只有單位不明確時，才去猜測名稱裡的規格
+            const weightMatch = name.match(/(\d+(\.\d+)?)\s*(KG|kg|G|g|ML|ml|L|l)/i);
+            if (weightMatch) {
+                const val = parseFloat(weightMatch[1]);
+                const wu = weightMatch[3].toLowerCase();
+                
+                if (wu === 'kg') { capacity = val * 1000; baseUnit = 'g'; }
+                else if (wu === 'g') { capacity = val; baseUnit = 'g'; }
+                else if (wu === 'l') { capacity = val * 1000; baseUnit = 'ml'; }
+                else if (wu === 'ml') { capacity = val; baseUnit = 'ml'; }
+            }
+            
+            return { capacity, baseUnit };
+        };
+
         const App = () => {
             // Local State
             const [ingredients, setIngredients] = useState(() => JSON.parse(localStorage.getItem('hq_ingredients')) || DEFAULT_INGREDIENTS);
@@ -176,6 +212,7 @@
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
+            const [syncStatus, setSyncStatus] = useState('local');
 
             // Import Modal State
             const [showImportModal, setShowImportModal] = useState(false);
@@ -190,7 +227,8 @@
                         const firestore = window.FirebaseServices.init(firebaseConfig);
                         setDb(firestore);
                         setIsCloudConnected(true);
-                    } catch (e) { console.error("Firebase init failed", e); }
+                        setSyncStatus('connected');
+                    } catch (e) { console.error("Firebase init failed", e); setSyncStatus('error'); }
                 }
             }, [firebaseConfig]);
 
@@ -242,6 +280,7 @@
                 let storeCostMap = {}; 
 
                 if (currentStoreId === 'ALL') {
+                    // Accumulate
                     stores.forEach(store => {
                         const sData = currentStoreData[store.id] || {};
                         const safeAdd = (target, source) => {
@@ -254,6 +293,7 @@
                         safeAdd(targetPurchaseAmount, sData.purchaseAmounts);
                     });
 
+                    // Weighted Costs
                     ingredients.forEach(ing => {
                         let totalCost = 0;
                         let totalQty = 0;
@@ -322,8 +362,9 @@
                     
                     const actualUsageQtyBase = openingQtyBase + purchaseQtyBase - closingQtyBase;
                     const appliedUnitCost = getAppliedUnitCost(ing.id, ing.unitCost);
+                    
                     const actualUsageCost = actualUsageQtyBase * appliedUnitCost; 
-                    const totalPurchaseCost = purchaseQtyBase * appliedUnitCost; 
+                    const totalPurchaseCost = purchaseAmt > 0 ? purchaseAmt : (purchaseQtyBase * appliedUnitCost);
 
                     let theoreticalQty = 0;
                     relevantDishes.forEach(dish => {
@@ -409,7 +450,7 @@
             };
             
             const clearSection = (type) => {
-                if(!confirm(`確定要清空本月 (${currentMonth}) 的${type === 'inventory' ? '進銷存' : '銷售'}數據嗎？此動作無法復原。`)) return;
+                if(!confirm(`確定要清空本月 (${currentMonth}) 的${type === 'inventory' ? '進銷存' : '銷售'}數據嗎？`)) return;
                 const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
                 if (!newMonthlyData[currentMonth] || !newMonthlyData[currentMonth][currentStoreId]) return;
                 if (type === 'inventory') {
@@ -469,23 +510,23 @@
                     
                     lines.forEach(line => {
                         const parts = parseCSVRow(line);
-                        // Using provided ERP format structure: Index 1=ID, 2=Name, 6=Qty, 9=TotalValue
                         if (parts.length < 7) return;
 
                         const idStr = parts[1] || "";
                         const nameRaw = parts[2] || "";
                         const qty = parseFloat((parts[6] || "0").replace(/,/g, ''));
+                        const unit = parts[8] || "單位";
                         const val = parseFloat((parts[9] || "0").replace(/,/g, ''));
 
-                        // 保留代碼與名稱
+                        // 保留代碼與名稱，確保唯一性
                         const name = nameRaw.trim(); 
                         if (!name) return;
 
                         let ing = ingredients.find(i => i.name === name || i.alias === name) || newIngredientsToAdd.find(i => i.name === name);
                         if (!ing) {
-                            // 自動抓取 CSV 中的單位 (第8欄, index 8)
-                            const unitFromCSV = parts[8] || '單位';
-                            ing = { id: `i_auto_${Date.now()}_${newItemCount}`, name: name, unit: unitFromCSV, capacity: 1, baseUnit: unitFromCSV, unitCost: 0, alias: '' };
+                            // Auto detect capacity from UNIT first
+                            const { capacity, baseUnit } = detectCapacity(name, unit);
+                            ing = { id: `i_auto_${Date.now()}_${newItemCount}`, name: name, unit: unit, capacity: capacity, baseUnit: baseUnit, unitCost: 0, alias: '' };
                             newIngredientsToAdd.push(ing);
                             newItemCount++;
                         }
@@ -497,7 +538,7 @@
                             updates.purchase[ing.id] = (updates.purchase[ing.id] || 0) - qty;
                             amountUpdates[ing.id] = (amountUpdates[ing.id] || 0) - val;
                         } else if (idStr.includes('盤點')) {
-                            updates.closing[ing.id] = qty;
+                            updates.closing[ing.id] = Math.abs(qty); // Force positive
                         }
                         successCount++;
                     });
@@ -506,6 +547,7 @@
                          const totalAmount = amountUpdates[ingId];
                          const totalQty = updates.purchase[ingId];
                          const ing = ingredients.find(i => i.id === ingId) || newIngredientsToAdd.find(i => i.id === ingId);
+                         
                          if (totalAmount > 0 && totalQty > 0 && ing) {
                              const capacity = ing.capacity || 1;
                              costUpdates[ingId] = (totalAmount / totalQty) / capacity;
@@ -549,7 +591,6 @@
                     if (newIngredients.length > 0) saveIngredients([...ingredients, ...newIngredients]);
 
                 } else if (importType === 'purchase') {
-                    // Manual/Simple Purchase Import
                     let updates = {};
                     let costUpdates = {};
                     lines.forEach(line => {
@@ -594,21 +635,24 @@
                         });
                         if (nameIdx !== -1 && qtyIdx !== -1) break;
                     }
-                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; }
+                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; } 
+
                     lines.forEach((line) => {
                         const parts = parseCSVRow(line);
                         if (parts.length > Math.max(nameIdx, qtyIdx)) {
                             const name = parts[nameIdx].trim();
                             const qtyStr = parts[qtyIdx].replace(/,/g, '');
                             const quantityVal = parseFloat(qtyStr);
+                            
                             if (['名稱','品名'].some(k => name.includes(k)) || isNaN(quantityVal)) return;
+
                             let dish = dishes.find(d => d.name === name) || newDishesToAdd.find(d => d.name === name);
                             if (!dish) {
                                 dish = { id: `d_auto_${Date.now()}_${newItemCount}`, name: name, price: 0, storeId: 'ALL' };
                                 newDishesToAdd.push(dish);
                                 newItemCount++;
                             }
-                            updates[dish.id] = quantityVal;
+                            updates[dish.id] = quantityVal; // Overwrite sales
                             successCount++;
                         }
                     });
@@ -629,7 +673,7 @@
                 const BOM = "\uFEFF"; 
                 let csvContent = BOM;
                 const storeName = currentStoreId === 'ALL' ? '總部匯總' : stores.find(s => s.id === currentStoreId)?.name || 'Unknown';
-                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v5.4) ---\n`;
+                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v5.5) ---\n`;
                 csvContent += "食材名稱,採購單位,換算,基礎單位,應用均價,期初(入),進貨(入),期末(入),進貨金額$,實際耗用(基),理論耗用(基),差異$,狀態\n";
                 analysis.ingredientUsage.forEach(row => {
                     csvContent += `${row.name},${row.unit},${row.capacity},${row.baseUnit},${row.appliedUnitCost.toFixed(4)},${row.openingQty},${row.purchaseQty},${row.closingQty},${row.purchaseAmt},${row.actualUsageQtyBase.toFixed(1)},${row.theoreticalQty.toFixed(1)},${row.varianceCost.toFixed(0)},${row.statusText}\n`;
