@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v5.6.1 單位修正版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v5.7 ERP完整對接版)</title>
     
     <!-- 1. 引入 React 和 Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -11,18 +11,19 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- 2. 引入 Firebase SDK (Compat 版本) -->
+    <!-- 2. 引入 Firebase SDK (Compat 版本 - 最穩定) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
     <script>
+        // 初始化 Firebase
         window.FirebaseServices = {
             init: (rawConfig) => {
                 try {
                     let configStr = rawConfig.trim();
                     if (configStr.indexOf('=') > -1) configStr = configStr.substring(configStr.indexOf('=') + 1).trim();
                     if (configStr.endsWith(';')) configStr = configStr.slice(0, -1);
-                    // 寬容解析 JSON (處理 key 沒有引號的情況)
+                    // 寬容解析
                     const jsonStr = configStr.replace(/(\w+)(?=:)/g, '"$1"').replace(/'/g, '"');
                     const config = JSON.parse(jsonStr);
 
@@ -32,7 +33,7 @@
                     return firebase.firestore();
                 } catch (e) {
                     console.error("Firebase Parsing/Init Error:", e);
-                    // Fallback: try evaluate if simple JSON parse fails
+                    // Fallback attempt
                     try {
                          const config = new Function("return " + rawConfig.trim().replace(/const\s+\w+\s*=\s*/, "").replace(/;$/, ""))();
                          if (!firebase.apps.length) firebase.initializeApp(config);
@@ -116,7 +117,7 @@
 
         // --- 預設數據 ---
         const DEFAULT_INGREDIENTS = [
-            { id: 'i1', name: "範例: [A001] 漢堡肉排", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
+            { id: 'i1', name: "範例: [A001] 漢堡肉排", alias: "", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
         ];
         const DEFAULT_DISHES = [
             { id: 'd1', name: "範例: 經典起司堡", price: 150, storeId: 'ALL' }
@@ -158,37 +159,32 @@
             return result;
         };
 
-        // 單位偵測 (修正版：優先看 Unit，再看 Name)
+        // 單位偵測
         const detectCapacity = (name, unit) => {
             let capacity = 1;
             let baseUnit = unit || '單位';
-            
             const u = (unit || "").trim().toLowerCase();
             
-            // 1. 強制鎖定標準單位
             if (u === 'kg' || u === '公斤' || u === 'kilogram') { return { capacity: 1000, baseUnit: 'g' }; }
             if (u === 'g' || u === '公克' || u === 'gram') { return { capacity: 1, baseUnit: 'g' }; }
             if (u === 'l' || u === '公升' || u === 'liter') { return { capacity: 1000, baseUnit: 'ml' }; }
             if (u === 'ml' || u === '毫升' || u === 'cc') { return { capacity: 1, baseUnit: 'ml' }; }
             if (u === 'lb' || u === '磅' || u === 'pound') { return { capacity: 454, baseUnit: 'g' }; }
 
-            // 2. 只有單位不明確時，才去猜測名稱裡的規格
             const weightMatch = name.match(/(\d+(\.\d+)?)\s*(KG|kg|G|g|ML|ml|L|l)/i);
             if (weightMatch) {
                 const val = parseFloat(weightMatch[1]);
                 const wu = weightMatch[3].toLowerCase();
-                
                 if (wu === 'kg') { capacity = val * 1000; baseUnit = 'g'; }
                 else if (wu === 'g') { capacity = val; baseUnit = 'g'; }
                 else if (wu === 'l') { capacity = val * 1000; baseUnit = 'ml'; }
                 else if (wu === 'ml') { capacity = val; baseUnit = 'ml'; }
             }
-            
             return { capacity, baseUnit };
         };
 
         const App = () => {
-            // Local State
+            // State
             const [ingredients, setIngredients] = useState(() => JSON.parse(localStorage.getItem('hq_ingredients')) || DEFAULT_INGREDIENTS);
             const [dishes, setDishes] = useState(() => JSON.parse(localStorage.getItem('hq_dishes')) || DEFAULT_DISHES);
             const [recipes, setRecipes] = useState(() => JSON.parse(localStorage.getItem('hq_recipes')) || DEFAULT_RECIPES);
@@ -207,32 +203,27 @@
             const [ingredientSearch, setIngredientSearch] = useState('');
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             
-            // Cloud State
+            // Cloud
             const [firebaseConfig, setFirebaseConfig] = useState(() => localStorage.getItem('hq_firebase_config') || '');
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
-            const [syncStatus, setSyncStatus] = useState('local');
-
-            // Import Modal State
             const [showImportModal, setShowImportModal] = useState(false);
             const [importType, setImportType] = useState('erp_stock_v2'); 
             const [importText, setImportText] = useState('');
             const [importEncoding, setImportEncoding] = useState('UTF-8'); 
 
-            // --- Effects: Cloud Init ---
+            // Effects
             useEffect(() => {
                 if (firebaseConfig && window.FirebaseServices) {
                     try {
                         const firestore = window.FirebaseServices.init(firebaseConfig);
                         setDb(firestore);
                         setIsCloudConnected(true);
-                        setSyncStatus('connected');
-                    } catch (e) { console.error("Firebase init failed", e); setSyncStatus('error'); }
+                    } catch (e) { console.error(e); }
                 }
             }, [firebaseConfig]);
 
-            // --- Effects: Cloud Sync ---
             useEffect(() => {
                 if (!db) return;
                 const unsub1 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'master_data', (data) => {
@@ -247,14 +238,12 @@
                 return () => { unsub1(); unsub2(); };
             }, [db]);
 
-            // --- Helper: Persist Data ---
             const persistData = (type, data) => {
                 if (type === 'ingredients') localStorage.setItem('hq_ingredients', JSON.stringify(data));
                 if (type === 'dishes') localStorage.setItem('hq_dishes', JSON.stringify(data));
                 if (type === 'recipes') localStorage.setItem('hq_recipes', JSON.stringify(data));
                 if (type === 'stores') localStorage.setItem('hq_stores', JSON.stringify(data));
                 if (type === 'monthly') localStorage.setItem('hq_monthly_data', JSON.stringify(data));
-                
                 if (db) {
                     if (type === 'monthly') window.FirebaseServices.save(db, 'restaurant_hq', 'monthly_data', { data });
                     else window.FirebaseServices.save(db, 'restaurant_hq', 'master_data', { [type]: data });
@@ -267,9 +256,9 @@
             const saveStores = (newData) => { setStores(newData); persistData('stores', newData); };
             const saveMonthlyData = (newData) => { setMonthlyData(newData); persistData('monthly', newData); };
 
-            // --- Analysis Logic ---
             const currentStoreData = useMemo(() => monthlyData[currentMonth] || {}, [monthlyData, currentMonth]);
 
+            // Analysis Logic
             const analysis = useMemo(() => {
                 let targetPurchase = {};
                 let targetOpening = {};
@@ -280,7 +269,6 @@
                 let storeCostMap = {}; 
 
                 if (currentStoreId === 'ALL') {
-                    // Accumulate
                     stores.forEach(store => {
                         const sData = currentStoreData[store.id] || {};
                         const safeAdd = (target, source) => {
@@ -293,7 +281,6 @@
                         safeAdd(targetPurchaseAmount, sData.purchaseAmounts);
                     });
 
-                    // Weighted Costs
                     ingredients.forEach(ing => {
                         let totalCost = 0;
                         let totalQty = 0;
@@ -309,7 +296,6 @@
                         });
                         weightedCosts[ing.id] = totalQty > 0 ? (totalCost / totalQty) : ing.unitCost; 
                     });
-
                 } else {
                     const sData = currentStoreData[currentStoreId] || {};
                     targetPurchase = sData.purchase || {};
@@ -362,7 +348,6 @@
                     
                     const actualUsageQtyBase = openingQtyBase + purchaseQtyBase - closingQtyBase;
                     const appliedUnitCost = getAppliedUnitCost(ing.id, ing.unitCost);
-                    
                     const actualUsageCost = actualUsageQtyBase * appliedUnitCost; 
                     const totalPurchaseCost = purchaseAmt > 0 ? purchaseAmt : (purchaseQtyBase * appliedUnitCost);
 
@@ -410,7 +395,6 @@
                 const theoreticalCostRatio = totalRevenue > 0 ? (totalTheoreticalCost / totalRevenue) * 100 : 0;
                 const costVariance = totalActualCost - totalTheoreticalCost;
                 const varianceRatio = totalRevenue > 0 ? (costVariance / totalRevenue) * 100 : 0;
-
                 const top5Risks = [...ingredientUsage].filter(i => i.varianceCost > 0).sort((a, b) => b.varianceCost - a.varianceCost).slice(0, 5);
 
                 let priceRadar = [];
@@ -510,21 +494,20 @@
                     
                     lines.forEach(line => {
                         const parts = parseCSVRow(line);
-                        if (parts.length < 7) return;
+                        // Using user provided ERP format: Index 1=ID, 2=Name, 6=Qty, 8=Unit, 9=TotalValue
+                        if (parts.length < 9) return;
 
                         const idStr = parts[1] || "";
-                        const nameRaw = parts[2] || "";
+                        const name = (parts[2] || "").trim(); // Keep full name including brackets
                         const qty = parseFloat((parts[6] || "0").replace(/,/g, ''));
-                        const unit = parts[8] || "單位";
-                        const val = parseFloat((parts[9] || "0").replace(/,/g, ''));
+                        const unit = parts[8] || "單位"; // Column I
+                        const val = parseFloat((parts[9] || "0").replace(/,/g, '')); // Column J
 
-                        // 保留代碼與名稱，確保唯一性
-                        const name = nameRaw.trim(); 
                         if (!name) return;
 
                         let ing = ingredients.find(i => i.name === name || i.alias === name) || newIngredientsToAdd.find(i => i.name === name);
                         if (!ing) {
-                            // Auto detect capacity from UNIT first
+                            // Auto detect capacity
                             const { capacity, baseUnit } = detectCapacity(name, unit);
                             ing = { id: `i_auto_${Date.now()}_${newItemCount}`, name: name, unit: unit, capacity: capacity, baseUnit: baseUnit, unitCost: 0, alias: '' };
                             newIngredientsToAdd.push(ing);
@@ -535,14 +518,15 @@
                             updates.purchase[ing.id] = (updates.purchase[ing.id] || 0) + qty;
                             amountUpdates[ing.id] = (amountUpdates[ing.id] || 0) + val;
                         } else if (idStr.includes('OUT')) {
-                            updates.purchase[ing.id] = (updates.purchase[ing.id] || 0) - qty;
-                            amountUpdates[ing.id] = (amountUpdates[ing.id] || 0) - val;
+                            updates.purchase[ing.id] = (updates.purchase[ing.id] || 0) - qty; // Subtract OUT
+                            amountUpdates[ing.id] = (amountUpdates[ing.id] || 0) - val; // Subtract cost too
                         } else if (idStr.includes('盤點')) {
-                            updates.closing[ing.id] = Math.abs(qty); // Force positive
+                            updates.closing[ing.id] = Math.abs(qty); // Force positive for stock count
                         }
                         successCount++;
                     });
 
+                    // Update Unit Costs
                     Object.keys(amountUpdates).forEach(ingId => {
                          const totalAmount = amountUpdates[ingId];
                          const totalQty = updates.purchase[ingId];
@@ -591,6 +575,7 @@
                     if (newIngredients.length > 0) saveIngredients([...ingredients, ...newIngredients]);
 
                 } else if (importType === 'purchase') {
+                    // Manual/Simple Purchase Import
                     let updates = {};
                     let costUpdates = {};
                     lines.forEach(line => {
@@ -624,9 +609,11 @@
                     saveMonthlyData(newMonthlyData);
 
                 } else if (importType === 'sales') {
+                    // POS Sales Import
                     let nameIdx = -1; let qtyIdx = -1;
                     let newDishesToAdd = [];
                     let updates = {};
+                    // Auto-detect header
                     for (let i = 0; i < Math.min(lines.length, 5); i++) {
                         const parts = parseCSVRow(lines[i]);
                         parts.forEach((col, idx) => {
@@ -635,7 +622,7 @@
                         });
                         if (nameIdx !== -1 && qtyIdx !== -1) break;
                     }
-                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; } 
+                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; } // POS fallback
 
                     lines.forEach((line) => {
                         const parts = parseCSVRow(line);
@@ -644,6 +631,7 @@
                             const qtyStr = parts[qtyIdx].replace(/,/g, '');
                             const quantityVal = parseFloat(qtyStr);
                             
+                            // Check if header row or invalid data
                             if (['名稱','品名'].some(k => name.includes(k)) || isNaN(quantityVal)) return;
 
                             let dish = dishes.find(d => d.name === name) || newDishesToAdd.find(d => d.name === name);
@@ -857,10 +845,9 @@
                                                                 <tr>
                                                                     <th className="p-2 text-left min-w-[120px]">食材名稱</th>
                                                                     <th className="p-2 text-right">單位</th>
+                                                                    <th className="p-2 text-right">換算</th>
                                                                     <th className="p-2 text-right">進貨$</th>
-                                                                    <th className="p-2 text-right">期初</th>
-                                                                    <th className="p-2 text-center text-stone-300">+</th>
-                                                                    <th className="p-2 text-right">進貨(淨)</th>
+                                                                    <th className="p-2 text-right">淨進貨</th>
                                                                     <th className="p-2 text-center text-stone-300">-</th>
                                                                     <th className="p-2 text-right">期末</th>
                                                                     <th className="p-2 text-center text-stone-300">=</th>
@@ -871,6 +858,9 @@
                                                             <tbody className="divide-y divide-stone-100">
                                                                 {ingredients.map(ing => {
                                                                     const sData = currentStoreData[currentStoreId] || {};
+                                                                    // For manual input, we assume opening is 0 if not set, or carry forward logic (not implemented here for simplicity)
+                                                                    // Logic: Usage = (Purchase Net) - Closing. (Assuming Opening is 0 for monthly ERP report logic)
+                                                                    // But UI allows Opening input. 
                                                                     const open = sData.opening?.[ing.id] || 0;
                                                                     const pur = sData.purchase?.[ing.id] || 0;
                                                                     const close = sData.closing?.[ing.id] || 0;
@@ -880,14 +870,14 @@
                                                                         <tr key={ing.id} className="hover:bg-stone-50">
                                                                             <td className="p-2 font-medium">{ing.name} <div className="text-[10px] text-stone-400">{ing.alias}</div></td>
                                                                             <td className="p-2 text-right text-xs text-stone-500">{ing.unit}</td>
+                                                                            <td className="p-2 text-right text-xs text-stone-500"><input type="number" className="w-12 text-center border rounded bg-yellow-50" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} /></td>
                                                                             <td className="p-2 text-right text-xs text-stone-500">${purAmt.toLocaleString()}</td>
                                                                             <td className="p-2"><input type="number" className="input-cell" value={open} onChange={(e) => updateStoreData(currentStoreId, 'opening', ing.id, e.target.value)} /></td>
-                                                                            <td className="p-2 text-center text-stone-300">+</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-blue-50/50 border-blue-200" value={pur} onChange={(e) => updateStoreData(currentStoreId, 'purchase', ing.id, e.target.value)} /></td>
                                                                             <td className="p-2 text-center text-stone-300">-</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-green-50/50 border-green-200" value={close} onChange={(e) => updateStoreData(currentStoreId, 'closing', ing.id, e.target.value)} /></td>
                                                                             <td className="p-2 text-center text-stone-300">=</td>
-                                                                            <td className="p-2 text-right font-bold text-blue-700">{used}</td>
+                                                                            <td className="p-2 text-right font-bold text-blue-700">{used.toFixed(2)}</td>
                                                                             <td className="p-2 text-center"><button onClick={() => deleteIngredient(ing.id)} className="btn-danger-icon"><Icon name="Trash2" size={16}/></button></td>
                                                                         </tr>
                                                                     );
