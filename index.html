@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v5.4 ERP深度整合版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v5.5 單位換算版)</title>
     
     <!-- 1. 引入 React 和 Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -16,7 +16,6 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
     <script>
-        // 初始化 Firebase
         window.FirebaseServices = {
             init: (rawConfig) => {
                 try {
@@ -27,8 +26,8 @@
                     if (!firebase.apps.length) firebase.initializeApp(config);
                     return firebase.firestore();
                 } catch (e) {
-                    console.error("Firebase Parsing/Init Error:", e);
-                    throw new Error("設定碼格式無法解析，請確認複製內容正確。");
+                    console.error("Firebase Init Error:", e);
+                    throw new Error("設定碼格式錯誤");
                 }
             },
             subscribe: (db, collection, docId, callback) => {
@@ -103,20 +102,25 @@
             );
         };
 
-        // --- 預設數據 (保持乾淨) ---
+        // --- 預設數據 ---
+        // 修正：預設值加入 capacity: 1 以防錯誤
         const DEFAULT_INGREDIENTS = [
-            { id: 'i1', name: "[A001] 漢堡肉排", alias: "", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "範例" }
+            { id: 'i1', name: "[A001] 漢堡肉排", alias: "冷凍牛肉餅(箱)", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
         ];
+
         const DEFAULT_DISHES = [
             { id: 'd1', name: "經典起司堡", price: 150, storeId: 'ALL' }
         ];
+
         const DEFAULT_RECIPES = [
             { dishId: 'd1', ingredientId: 'i1', amount: 1 }
         ];
+
         const INITIAL_STORES = [
             { id: 's1', name: '台北總店' },
             { id: 's2', name: '高雄分店' }
         ];
+
         const INITIAL_STORE_DATA = {
             's1': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} },
             's2': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} }
@@ -124,7 +128,7 @@
 
         const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
 
-        // --- CSV Parser (增強版) ---
+        // --- CSV Parser ---
         const parseCSVRow = (text) => {
             const result = [];
             let startValueIndex = 0;
@@ -148,6 +152,7 @@
         };
 
         const App = () => {
+            // Local State
             const [ingredients, setIngredients] = useState(() => JSON.parse(localStorage.getItem('hq_ingredients')) || DEFAULT_INGREDIENTS);
             const [dishes, setDishes] = useState(() => JSON.parse(localStorage.getItem('hq_dishes')) || DEFAULT_DISHES);
             const [recipes, setRecipes] = useState(() => JSON.parse(localStorage.getItem('hq_recipes')) || DEFAULT_RECIPES);
@@ -165,15 +170,20 @@
             const [activeTab, setActiveTab] = useState('boss_report');
             const [ingredientSearch, setIngredientSearch] = useState('');
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+            
+            // Cloud State
             const [firebaseConfig, setFirebaseConfig] = useState(() => localStorage.getItem('hq_firebase_config') || '');
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
+
+            // Import Modal State
             const [showImportModal, setShowImportModal] = useState(false);
             const [importType, setImportType] = useState('erp_stock_v2'); 
             const [importText, setImportText] = useState('');
             const [importEncoding, setImportEncoding] = useState('UTF-8'); 
 
+            // --- Effects: Cloud Init ---
             useEffect(() => {
                 if (firebaseConfig && window.FirebaseServices) {
                     try {
@@ -184,6 +194,7 @@
                 }
             }, [firebaseConfig]);
 
+            // --- Effects: Cloud Sync ---
             useEffect(() => {
                 if (!db) return;
                 const unsub1 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'master_data', (data) => {
@@ -198,6 +209,7 @@
                 return () => { unsub1(); unsub2(); };
             }, [db]);
 
+            // --- Helper: Persist Data ---
             const persistData = (type, data) => {
                 if (type === 'ingredients') localStorage.setItem('hq_ingredients', JSON.stringify(data));
                 if (type === 'dishes') localStorage.setItem('hq_dishes', JSON.stringify(data));
@@ -457,19 +469,23 @@
                     
                     lines.forEach(line => {
                         const parts = parseCSVRow(line);
+                        // Using provided ERP format structure: Index 1=ID, 2=Name, 6=Qty, 9=TotalValue
                         if (parts.length < 7) return;
 
                         const idStr = parts[1] || "";
-                        const name = (parts[2] || "").trim(); // Keep brackets
+                        const nameRaw = parts[2] || "";
                         const qty = parseFloat((parts[6] || "0").replace(/,/g, ''));
-                        const unit = parts[8] || "單位";
                         const val = parseFloat((parts[9] || "0").replace(/,/g, ''));
 
+                        // 保留代碼與名稱
+                        const name = nameRaw.trim(); 
                         if (!name) return;
 
                         let ing = ingredients.find(i => i.name === name || i.alias === name) || newIngredientsToAdd.find(i => i.name === name);
                         if (!ing) {
-                            ing = { id: `i_auto_${Date.now()}_${newItemCount}`, name: name, unit: unit, capacity: 1, baseUnit: unit, unitCost: 0, alias: '' };
+                            // 自動抓取 CSV 中的單位 (第8欄, index 8)
+                            const unitFromCSV = parts[8] || '單位';
+                            ing = { id: `i_auto_${Date.now()}_${newItemCount}`, name: name, unit: unitFromCSV, capacity: 1, baseUnit: unitFromCSV, unitCost: 0, alias: '' };
                             newIngredientsToAdd.push(ing);
                             newItemCount++;
                         }
@@ -567,11 +583,9 @@
                     saveMonthlyData(newMonthlyData);
 
                 } else if (importType === 'sales') {
-                    // POS Sales Import
                     let nameIdx = -1; let qtyIdx = -1;
                     let newDishesToAdd = [];
                     let updates = {};
-                    // Auto-detect header
                     for (let i = 0; i < Math.min(lines.length, 5); i++) {
                         const parts = parseCSVRow(lines[i]);
                         parts.forEach((col, idx) => {
@@ -580,25 +594,21 @@
                         });
                         if (nameIdx !== -1 && qtyIdx !== -1) break;
                     }
-                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; } // POS fallback
-
+                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; }
                     lines.forEach((line) => {
                         const parts = parseCSVRow(line);
                         if (parts.length > Math.max(nameIdx, qtyIdx)) {
                             const name = parts[nameIdx].trim();
                             const qtyStr = parts[qtyIdx].replace(/,/g, '');
                             const quantityVal = parseFloat(qtyStr);
-                            
-                            // Check if header row or invalid data
                             if (['名稱','品名'].some(k => name.includes(k)) || isNaN(quantityVal)) return;
-
                             let dish = dishes.find(d => d.name === name) || newDishesToAdd.find(d => d.name === name);
                             if (!dish) {
                                 dish = { id: `d_auto_${Date.now()}_${newItemCount}`, name: name, price: 0, storeId: 'ALL' };
                                 newDishesToAdd.push(dish);
                                 newItemCount++;
                             }
-                            updates[dish.id] = quantityVal; // Overwrite sales
+                            updates[dish.id] = quantityVal;
                             successCount++;
                         }
                     });
