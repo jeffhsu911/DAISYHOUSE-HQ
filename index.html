@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v5.7 ERP完整對接版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v5.7.1 介面修復版)</title>
     
     <!-- 1. 引入 React 和 Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -116,27 +116,38 @@
         };
 
         // --- 預設數據 ---
+        // 新增欄位：capacity (換算容量), baseUnit (基礎單位), note (備註)
         const DEFAULT_INGREDIENTS = [
-            { id: 'i1', name: "範例: [A001] 漢堡肉排", alias: "", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
+            { id: 'i1', name: "[A001] 漢堡肉排", alias: "冷凍牛肉餅(箱)", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
         ];
+
         const DEFAULT_DISHES = [
-            { id: 'd1', name: "範例: 經典起司堡", price: 150, storeId: 'ALL' }
+            { id: 'd1', name: "經典起司堡", price: 150, storeId: 'ALL' }
         ];
+
         const DEFAULT_RECIPES = [
             { dishId: 'd1', ingredientId: 'i1', amount: 1 }
         ];
+
         const INITIAL_STORES = [
             { id: 's1', name: '台北總店' },
             { id: 's2', name: '高雄分店' }
         ];
+
+        // 結構更新：增加 purchasePrices (各店進價紀錄)
         const INITIAL_STORE_DATA = {
-            's1': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} },
-            's2': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} }
+            's1': {
+                purchase: { 'i1': 0 }, purchaseAmounts: { 'i1': 0 }, purchasePrices: { 'i1': 0 }, 
+                opening: { 'i1': 0 }, closing: { 'i1': 0 }, sales: { 'd1': 0 }
+            },
+            's2': {
+                purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {}
+            }
         };
 
         const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
 
-        // --- CSV Parser ---
+        // --- CSV Parser (通用) ---
         const parseCSVRow = (text) => {
             const result = [];
             let startValueIndex = 0;
@@ -208,12 +219,14 @@
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
+
+            // Import Modal State
             const [showImportModal, setShowImportModal] = useState(false);
             const [importType, setImportType] = useState('erp_stock_v2'); 
             const [importText, setImportText] = useState('');
             const [importEncoding, setImportEncoding] = useState('UTF-8'); 
 
-            // Effects
+            // --- Effects: Cloud Init ---
             useEffect(() => {
                 if (firebaseConfig && window.FirebaseServices) {
                     try {
@@ -224,6 +237,7 @@
                 }
             }, [firebaseConfig]);
 
+            // --- Effects: Cloud Sync ---
             useEffect(() => {
                 if (!db) return;
                 const unsub1 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'master_data', (data) => {
@@ -238,12 +252,14 @@
                 return () => { unsub1(); unsub2(); };
             }, [db]);
 
+            // --- Helper: Persist Data ---
             const persistData = (type, data) => {
                 if (type === 'ingredients') localStorage.setItem('hq_ingredients', JSON.stringify(data));
                 if (type === 'dishes') localStorage.setItem('hq_dishes', JSON.stringify(data));
                 if (type === 'recipes') localStorage.setItem('hq_recipes', JSON.stringify(data));
                 if (type === 'stores') localStorage.setItem('hq_stores', JSON.stringify(data));
                 if (type === 'monthly') localStorage.setItem('hq_monthly_data', JSON.stringify(data));
+                
                 if (db) {
                     if (type === 'monthly') window.FirebaseServices.save(db, 'restaurant_hq', 'monthly_data', { data });
                     else window.FirebaseServices.save(db, 'restaurant_hq', 'master_data', { [type]: data });
@@ -256,9 +272,9 @@
             const saveStores = (newData) => { setStores(newData); persistData('stores', newData); };
             const saveMonthlyData = (newData) => { setMonthlyData(newData); persistData('monthly', newData); };
 
+            // --- Analysis Logic ---
             const currentStoreData = useMemo(() => monthlyData[currentMonth] || {}, [monthlyData, currentMonth]);
 
-            // Analysis Logic
             const analysis = useMemo(() => {
                 let targetPurchase = {};
                 let targetOpening = {};
@@ -269,6 +285,7 @@
                 let storeCostMap = {}; 
 
                 if (currentStoreId === 'ALL') {
+                    // Accumulate
                     stores.forEach(store => {
                         const sData = currentStoreData[store.id] || {};
                         const safeAdd = (target, source) => {
@@ -281,6 +298,7 @@
                         safeAdd(targetPurchaseAmount, sData.purchaseAmounts);
                     });
 
+                    // Weighted Costs
                     ingredients.forEach(ing => {
                         let totalCost = 0;
                         let totalQty = 0;
@@ -296,6 +314,7 @@
                         });
                         weightedCosts[ing.id] = totalQty > 0 ? (totalCost / totalQty) : ing.unitCost; 
                     });
+
                 } else {
                     const sData = currentStoreData[currentStoreId] || {};
                     targetPurchase = sData.purchase || {};
@@ -348,6 +367,7 @@
                     
                     const actualUsageQtyBase = openingQtyBase + purchaseQtyBase - closingQtyBase;
                     const appliedUnitCost = getAppliedUnitCost(ing.id, ing.unitCost);
+                    
                     const actualUsageCost = actualUsageQtyBase * appliedUnitCost; 
                     const totalPurchaseCost = purchaseAmt > 0 ? purchaseAmt : (purchaseQtyBase * appliedUnitCost);
 
@@ -395,6 +415,7 @@
                 const theoreticalCostRatio = totalRevenue > 0 ? (totalTheoreticalCost / totalRevenue) * 100 : 0;
                 const costVariance = totalActualCost - totalTheoreticalCost;
                 const varianceRatio = totalRevenue > 0 ? (costVariance / totalRevenue) * 100 : 0;
+
                 const top5Risks = [...ingredientUsage].filter(i => i.varianceCost > 0).sort((a, b) => b.varianceCost - a.varianceCost).slice(0, 5);
 
                 let priceRadar = [];
@@ -434,7 +455,7 @@
             };
             
             const clearSection = (type) => {
-                if(!confirm(`確定要清空本月 (${currentMonth}) 的${type === 'inventory' ? '進銷存' : '銷售'}數據嗎？`)) return;
+                if(!confirm(`確定要清空本月 (${currentMonth}) 的${type === 'inventory' ? '進銷存' : '銷售'}數據嗎？此動作無法復原。`)) return;
                 const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
                 if (!newMonthlyData[currentMonth] || !newMonthlyData[currentMonth][currentStoreId]) return;
                 if (type === 'inventory') {
@@ -494,7 +515,7 @@
                     
                     lines.forEach(line => {
                         const parts = parseCSVRow(line);
-                        // Using user provided ERP format: Index 1=ID, 2=Name, 6=Qty, 8=Unit, 9=TotalValue
+                        // Using provided ERP format structure: Index 1=ID, 2=Name, 6=Qty, 8=Unit, 9=TotalValue
                         if (parts.length < 9) return;
 
                         const idStr = parts[1] || "";
@@ -661,7 +682,7 @@
                 const BOM = "\uFEFF"; 
                 let csvContent = BOM;
                 const storeName = currentStoreId === 'ALL' ? '總部匯總' : stores.find(s => s.id === currentStoreId)?.name || 'Unknown';
-                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v5.5) ---\n`;
+                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v5.7) ---\n`;
                 csvContent += "食材名稱,採購單位,換算,基礎單位,應用均價,期初(入),進貨(入),期末(入),進貨金額$,實際耗用(基),理論耗用(基),差異$,狀態\n";
                 analysis.ingredientUsage.forEach(row => {
                     csvContent += `${row.name},${row.unit},${row.capacity},${row.baseUnit},${row.appliedUnitCost.toFixed(4)},${row.openingQty},${row.purchaseQty},${row.closingQty},${row.purchaseAmt},${row.actualUsageQtyBase.toFixed(1)},${row.theoreticalQty.toFixed(1)},${row.varianceCost.toFixed(0)},${row.statusText}\n`;
@@ -858,9 +879,6 @@
                                                             <tbody className="divide-y divide-stone-100">
                                                                 {ingredients.map(ing => {
                                                                     const sData = currentStoreData[currentStoreId] || {};
-                                                                    // For manual input, we assume opening is 0 if not set, or carry forward logic (not implemented here for simplicity)
-                                                                    // Logic: Usage = (Purchase Net) - Closing. (Assuming Opening is 0 for monthly ERP report logic)
-                                                                    // But UI allows Opening input. 
                                                                     const open = sData.opening?.[ing.id] || 0;
                                                                     const pur = sData.purchase?.[ing.id] || 0;
                                                                     const close = sData.closing?.[ing.id] || 0;
