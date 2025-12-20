@@ -3,8 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v5.8 最終穩定版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v5.8.1 終極修復版)</title>
     
+    <!-- 0. 錯誤偵測系統 (最優先載入) -->
+    <script>
+        window.onerror = function(message, source, lineno, colno, error) {
+            alert("系統發生錯誤，請截圖給工程師：\n" + message + "\nLine: " + lineno);
+        };
+    </script>
+
     <!-- 1. 引入 React 和 Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -134,9 +141,15 @@
             { id: 's2', name: '高雄分店' }
         ];
 
+        // 結構更新：增加 purchasePrices (各店進價紀錄)
         const INITIAL_STORE_DATA = {
-            's1': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} },
-            's2': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} }
+            's1': {
+                purchase: { 'i1': 0 }, purchaseAmounts: { 'i1': 0 }, purchasePrices: { 'i1': 0 }, 
+                opening: { 'i1': 0 }, closing: { 'i1': 0 }, sales: { 'd1': 0 }
+            },
+            's2': {
+                purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {}
+            }
         };
 
         const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
@@ -194,14 +207,28 @@
             const [dishes, setDishes] = useState(() => JSON.parse(localStorage.getItem('hq_dishes')) || DEFAULT_DISHES);
             const [recipes, setRecipes] = useState(() => JSON.parse(localStorage.getItem('hq_recipes')) || DEFAULT_RECIPES);
             const [stores, setStores] = useState(() => JSON.parse(localStorage.getItem('hq_stores')) || INITIAL_STORES);
+            
+            // Critical Fix: Data Structure Migration on Load
             const [monthlyData, setMonthlyData] = useState(() => {
-                const savedMonthly = localStorage.getItem('hq_monthly_data');
-                if (savedMonthly) return JSON.parse(savedMonthly);
-                const oldStoreData = localStorage.getItem('hq_store_data');
-                const currentM = getCurrentMonth();
-                if (oldStoreData) return { [currentM]: JSON.parse(oldStoreData) };
-                return { [currentM]: INITIAL_STORE_DATA };
+                const saved = localStorage.getItem('hq_monthly_data');
+                let data = saved ? JSON.parse(saved) : null;
+                if (!data) return { [getCurrentMonth()]: INITIAL_STORE_DATA };
+                
+                // Migration Logic: Ensure all stores have new fields
+                Object.keys(data).forEach(month => {
+                    Object.keys(data[month]).forEach(storeId => {
+                        const sData = data[month][storeId];
+                        if (!sData.purchase) sData.purchase = {};
+                        if (!sData.purchaseAmounts) sData.purchaseAmounts = {}; // New field
+                        if (!sData.purchasePrices) sData.purchasePrices = {}; // New field
+                        if (!sData.opening) sData.opening = {};
+                        if (!sData.closing) sData.closing = {};
+                        if (!sData.sales) sData.sales = {};
+                    });
+                });
+                return data;
             });
+
             const [currentMonth, setCurrentMonth] = useState(getCurrentMonth());
             const [currentStoreId, setCurrentStoreId] = useState('ALL'); 
             const [activeTab, setActiveTab] = useState('boss_report');
@@ -279,6 +306,7 @@
                 let storeCostMap = {}; 
 
                 if (currentStoreId === 'ALL') {
+                    // Accumulate
                     stores.forEach(store => {
                         const sData = currentStoreData[store.id] || {};
                         const safeAdd = (target, source) => {
@@ -291,6 +319,7 @@
                         safeAdd(targetPurchaseAmount, sData.purchaseAmounts);
                     });
 
+                    // Weighted Costs
                     ingredients.forEach(ing => {
                         let totalCost = 0;
                         let totalQty = 0;
@@ -359,6 +388,7 @@
                     
                     const actualUsageQtyBase = openingQtyBase + purchaseQtyBase - closingQtyBase;
                     const appliedUnitCost = getAppliedUnitCost(ing.id, ing.unitCost);
+                    
                     const actualUsageCost = actualUsageQtyBase * appliedUnitCost; 
                     const totalPurchaseCost = purchaseAmt > 0 ? purchaseAmt : (purchaseQtyBase * appliedUnitCost);
 
@@ -512,10 +542,10 @@
                         const idStr = parts[1] || "";
                         const nameRaw = parts[2] || "";
                         const qty = parseFloat((parts[6] || "0").replace(/,/g, ''));
-                        const unit = parts[8] || "單位"; // Column I
-                        const val = parseFloat((parts[9] || "0").replace(/,/g, '')); // Column J
+                        const val = parseFloat((parts[9] || "0").replace(/,/g, ''));
+                        const unit = parts[8] || "單位";
 
-                        // Keep full name including code, DO NOT regex replace
+                        // 保留代碼與名稱，確保唯一性
                         const name = nameRaw.trim(); 
                         if (!name) return;
 
@@ -675,7 +705,7 @@
                 const BOM = "\uFEFF"; 
                 let csvContent = BOM;
                 const storeName = currentStoreId === 'ALL' ? '總部匯總' : stores.find(s => s.id === currentStoreId)?.name || 'Unknown';
-                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v5.7) ---\n`;
+                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v5.8.1) ---\n`;
                 csvContent += "食材名稱,採購單位,換算,基礎單位,應用均價,期初(入),進貨(入),期末(入),進貨金額$,實際耗用(基),理論耗用(基),差異$,狀態\n";
                 analysis.ingredientUsage.forEach(row => {
                     csvContent += `${row.name},${row.unit},${row.capacity},${row.baseUnit},${row.appliedUnitCost.toFixed(4)},${row.openingQty},${row.purchaseQty},${row.closingQty},${row.purchaseAmt},${row.actualUsageQtyBase.toFixed(1)},${row.theoreticalQty.toFixed(1)},${row.varianceCost.toFixed(0)},${row.statusText}\n`;
@@ -754,7 +784,7 @@
                                         {/* Price Radar (Only in ALL mode) */}
                                         {currentStoreId === 'ALL' && (
                                             <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6 border-l-4 border-l-purple-500">
-                                                <h3 className="font-bold text-stone-800 mb-4 flex items-center gap-2"><Icon name="Radar" className="text-purple-600" /> 採購比價雷達 (Price Radar)</h3>
+                                                <h3 className="font-bold text-stone-800 mb-4 flex items-center gap-2"><Icon name="Radar" className="text-purple-600" /> 採購比價雷達</h3>
                                                 <div className="overflow-x-auto">
                                                     <table className="w-full text-sm text-left">
                                                         <thead className="bg-purple-50 text-purple-900 font-bold">
@@ -861,7 +891,9 @@
                                                                     <th className="p-2 text-right">單位</th>
                                                                     <th className="p-2 text-right">換算</th>
                                                                     <th className="p-2 text-right">進貨$</th>
-                                                                    <th className="p-2 text-right">淨進貨</th>
+                                                                    <th className="p-2 text-right">期初</th>
+                                                                    <th className="p-2 text-center text-stone-300">+</th>
+                                                                    <th className="p-2 text-right">進貨(淨)</th>
                                                                     <th className="p-2 text-center text-stone-300">-</th>
                                                                     <th className="p-2 text-right">期末</th>
                                                                     <th className="p-2 text-center text-stone-300">=</th>
@@ -883,6 +915,8 @@
                                                                             <td className="p-2 text-right text-xs text-stone-500">{ing.unit}</td>
                                                                             <td className="p-2 text-right text-xs text-stone-500"><input type="number" className="w-12 text-center border rounded bg-yellow-50" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} /></td>
                                                                             <td className="p-2 text-right text-xs text-stone-500">${purAmt.toLocaleString()}</td>
+                                                                            <td className="p-2"><input type="number" className="input-cell" value={open} onChange={(e) => updateStoreData(currentStoreId, 'opening', ing.id, e.target.value)} /></td>
+                                                                            <td className="p-2 text-center text-stone-300">+</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-blue-50/50 border-blue-200" value={pur} onChange={(e) => updateStoreData(currentStoreId, 'purchase', ing.id, e.target.value)} /></td>
                                                                             <td className="p-2 text-center text-stone-300">-</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-green-50/50 border-green-200" value={close} onChange={(e) => updateStoreData(currentStoreId, 'closing', ing.id, e.target.value)} /></td>
