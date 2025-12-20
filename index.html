@@ -3,52 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v5.8.1 終極修復版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v6.3 修復版)</title>
     
-    <!-- 0. 錯誤偵測系統 (最優先載入) -->
+    <!-- 1. 錯誤偵測 -->
     <script>
-        window.onerror = function(message, source, lineno, colno, error) {
-            alert("系統發生錯誤，請截圖給工程師：\n" + message + "\nLine: " + lineno);
+        window.onerror = function(msg, url, line, col, error) {
+            // 忽略 ResizeObserver 錯誤
+            if (msg && msg.includes('ResizeObserver')) return;
+            console.error("Global Error:", msg, "Line:", line);
         };
     </script>
 
-    <!-- 1. 引入 React 和 Tailwind -->
+    <!-- 2. 引入 React 和 Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- 2. 引入 Firebase SDK (Compat 版本 - 最穩定) -->
+    <!-- 3. 引入 Firebase SDK (Compat) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
     <script>
-        // 初始化 Firebase
         window.FirebaseServices = {
             init: (rawConfig) => {
                 try {
                     let configStr = rawConfig.trim();
-                    if (configStr.indexOf('=') > -1) configStr = configStr.substring(configStr.indexOf('=') + 1).trim();
-                    if (configStr.endsWith(';')) configStr = configStr.slice(0, -1);
-                    // 寬容解析
+                    configStr = configStr.replace(/const\s+\w+\s*=\s*/, '').replace(/;$/, '');
+                    configStr = configStr.replace(/\/\/.*$/mg, ''); 
                     const jsonStr = configStr.replace(/(\w+)(?=:)/g, '"$1"').replace(/'/g, '"');
                     const config = JSON.parse(jsonStr);
-
-                    if (!firebase.apps.length) {
-                        firebase.initializeApp(config);
-                    }
+                    if (!firebase.apps.length) firebase.initializeApp(config);
                     return firebase.firestore();
                 } catch (e) {
-                    console.error("Firebase Parsing/Init Error:", e);
-                    // Fallback attempt for non-standard JSON
-                    try {
-                         const config = new Function("return " + rawConfig.trim().replace(/const\s+\w+\s*=\s*/, "").replace(/;$/, ""))();
-                         if (!firebase.apps.length) firebase.initializeApp(config);
-                         return firebase.firestore();
-                    } catch (e2) {
-                        console.error("Config fallback failed", e2);
-                        throw new Error("設定碼格式無法解析，請確認複製內容正確。");
-                    }
+                    console.error("Firebase Config Error:", e);
+                    throw new Error("設定碼格式錯誤");
                 }
             },
             subscribe: (db, collection, docId, callback) => {
@@ -62,11 +51,8 @@
         };
     </script>
 
-    <!-- 3. 定義樣式 -->
     <style type="text/tailwindcss">
         body { font-family: 'Microsoft JhengHei', sans-serif; background-color: #f5f5f4; }
-        .fade-in { animation: fadeIn 0.3s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         input[type=number]::-webkit-inner-spin-button, 
         input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
         .report-card { @apply bg-white p-4 rounded-lg border border-stone-200 shadow-sm transition-all hover:shadow-md; }
@@ -76,18 +62,23 @@
         .btn-danger-icon { @apply text-stone-300 hover:text-red-500 transition-colors p-1 rounded hover:bg-red-50; }
         .input-cell { @apply w-full text-right border border-stone-200 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 outline-none text-sm; }
         .badge { @apply px-2 py-0.5 rounded text-xs font-bold inline-block; }
-        
         .mobile-menu-overlay { @apply fixed inset-0 bg-black/50 z-40 md:hidden; }
         .sidebar { @apply fixed md:relative w-64 h-full bg-stone-800 text-stone-200 shadow-xl z-50 transition-transform duration-300 ease-in-out; }
         .sidebar.closed { @apply -translate-x-full md:translate-x-0; }
     </style>
 </head>
 <body>
-    <div id="root"></div>
+    <div id="root" class="flex items-center justify-center h-screen text-gray-500">
+        <div class="text-center">
+            <h2 class="text-xl font-bold mb-2">系統載入中...</h2>
+            <p class="text-xs">(v6.3 Initializing)</p>
+        </div>
+    </div>
 
     <script type="text/babel">
         const { useState, useMemo, useEffect } = React;
 
+        // --- 修復 Icon 元件參數定義 ---
         const Icon = ({ name, size = 18, className = "" }) => {
             const icons = {
                 ChefHat: <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z M6 17h12" />,
@@ -96,7 +87,6 @@
                 Scale: <path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z M2 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z M7 21h10 M12 3v18 M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" />,
                 Trash2: <path d="M3 6h18 M19 6v14c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2V6 M8 6V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2 M10 11v6 M14 11v6" />,
                 Plus: <path d="M5 12h14 M12 5v14" />,
-                TrendingUp: <g><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" /><polyline points="17 6 23 6 23 12" /></g>,
                 AlertTriangle: <g><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></g>,
                 Download: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3" />,
                 Upload: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12" />,
@@ -125,7 +115,7 @@
 
         // --- 預設數據 ---
         const DEFAULT_INGREDIENTS = [
-            { id: 'i1', name: "[A001] 漢堡肉排", alias: "冷凍牛肉餅(箱)", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
+            { id: 'i1', name: "範例: [A001] 漢堡肉排", alias: "冷凍牛肉餅(箱)", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
         ];
 
         const DEFAULT_DISHES = [
@@ -141,15 +131,9 @@
             { id: 's2', name: '高雄分店' }
         ];
 
-        // 結構更新：增加 purchasePrices (各店進價紀錄)
         const INITIAL_STORE_DATA = {
-            's1': {
-                purchase: { 'i1': 0 }, purchaseAmounts: { 'i1': 0 }, purchasePrices: { 'i1': 0 }, 
-                opening: { 'i1': 0 }, closing: { 'i1': 0 }, sales: { 'd1': 0 }
-            },
-            's2': {
-                purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {}
-            }
+            's1': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} },
+            's2': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} }
         };
 
         const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
@@ -177,17 +161,15 @@
             return result;
         };
 
-        // 單位偵測 (Missing Function Added!)
         const detectCapacity = (name, unit) => {
             let capacity = 1;
             let baseUnit = unit || '單位';
             const u = (unit || "").trim().toLowerCase();
-            
-            if (u === 'kg' || u === '公斤' || u === 'kilogram') { return { capacity: 1000, baseUnit: 'g' }; }
-            if (u === 'g' || u === '公克' || u === 'gram') { return { capacity: 1, baseUnit: 'g' }; }
-            if (u === 'l' || u === '公升' || u === 'liter') { return { capacity: 1000, baseUnit: 'ml' }; }
-            if (u === 'ml' || u === '毫升' || u === 'cc') { return { capacity: 1, baseUnit: 'ml' }; }
-            if (u === 'lb' || u === '磅' || u === 'pound') { return { capacity: 454, baseUnit: 'g' }; }
+            if (['kg', '公斤', 'kilogram'].includes(u)) return { capacity: 1000, baseUnit: 'g' };
+            if (['g', '公克', 'gram'].includes(u)) return { capacity: 1, baseUnit: 'g' };
+            if (['l', '公升', 'liter'].includes(u)) return { capacity: 1000, baseUnit: 'ml' };
+            if (['ml', '毫升', 'cc'].includes(u)) return { capacity: 1, baseUnit: 'ml' };
+            if (['lb', '磅', 'pound'].includes(u)) return { capacity: 454, baseUnit: 'g' };
 
             const weightMatch = name.match(/(\d+(\.\d+)?)\s*(KG|kg|G|g|ML|ml|L|l)/i);
             if (weightMatch) {
@@ -202,52 +184,34 @@
         };
 
         const App = () => {
-            // State
             const [ingredients, setIngredients] = useState(() => JSON.parse(localStorage.getItem('hq_ingredients')) || DEFAULT_INGREDIENTS);
             const [dishes, setDishes] = useState(() => JSON.parse(localStorage.getItem('hq_dishes')) || DEFAULT_DISHES);
             const [recipes, setRecipes] = useState(() => JSON.parse(localStorage.getItem('hq_recipes')) || DEFAULT_RECIPES);
             const [stores, setStores] = useState(() => JSON.parse(localStorage.getItem('hq_stores')) || INITIAL_STORES);
-            
-            // Critical Fix: Data Structure Migration on Load
             const [monthlyData, setMonthlyData] = useState(() => {
-                const saved = localStorage.getItem('hq_monthly_data');
-                let data = saved ? JSON.parse(saved) : null;
-                if (!data) return { [getCurrentMonth()]: INITIAL_STORE_DATA };
-                
-                // Migration Logic: Ensure all stores have new fields
-                Object.keys(data).forEach(month => {
-                    Object.keys(data[month]).forEach(storeId => {
-                        const sData = data[month][storeId];
-                        if (!sData.purchase) sData.purchase = {};
-                        if (!sData.purchaseAmounts) sData.purchaseAmounts = {}; // New field
-                        if (!sData.purchasePrices) sData.purchasePrices = {}; // New field
-                        if (!sData.opening) sData.opening = {};
-                        if (!sData.closing) sData.closing = {};
-                        if (!sData.sales) sData.sales = {};
-                    });
-                });
-                return data;
+                const savedMonthly = localStorage.getItem('hq_monthly_data');
+                if (savedMonthly) return JSON.parse(savedMonthly);
+                const oldStoreData = localStorage.getItem('hq_store_data');
+                const currentM = getCurrentMonth();
+                if (oldStoreData) return { [currentM]: JSON.parse(oldStoreData) };
+                return { [currentM]: INITIAL_STORE_DATA };
             });
-
             const [currentMonth, setCurrentMonth] = useState(getCurrentMonth());
             const [currentStoreId, setCurrentStoreId] = useState('ALL'); 
             const [activeTab, setActiveTab] = useState('boss_report');
             const [ingredientSearch, setIngredientSearch] = useState('');
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             
-            // Cloud
             const [firebaseConfig, setFirebaseConfig] = useState(() => localStorage.getItem('hq_firebase_config') || '');
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
 
-            // Import
             const [showImportModal, setShowImportModal] = useState(false);
             const [importType, setImportType] = useState('erp_stock_v2'); 
             const [importText, setImportText] = useState('');
             const [importEncoding, setImportEncoding] = useState('UTF-8'); 
 
-            // --- Effects: Cloud Init ---
             useEffect(() => {
                 if (firebaseConfig && window.FirebaseServices) {
                     try {
@@ -258,7 +222,6 @@
                 }
             }, [firebaseConfig]);
 
-            // --- Effects: Cloud Sync ---
             useEffect(() => {
                 if (!db) return;
                 const unsub1 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'master_data', (data) => {
@@ -273,7 +236,6 @@
                 return () => { unsub1(); unsub2(); };
             }, [db]);
 
-            // --- Helper: Persist Data ---
             const persistData = (type, data) => {
                 if (type === 'ingredients') localStorage.setItem('hq_ingredients', JSON.stringify(data));
                 if (type === 'dishes') localStorage.setItem('hq_dishes', JSON.stringify(data));
@@ -287,13 +249,12 @@
                 }
             };
 
-            const saveIngredients = (newData) => { setIngredients(newData); persistData('ingredients', newData); };
-            const saveDishes = (newData) => { setDishes(newData); persistData('dishes', newData); };
-            const saveRecipes = (newData) => { setRecipes(newData); persistData('recipes', newData); };
-            const saveStores = (newData) => { setStores(newData); persistData('stores', newData); };
-            const saveMonthlyData = (newData) => { setMonthlyData(newData); persistData('monthly', newData); };
+            const saveIngredients = (d) => { setIngredients(d); persistData('ingredients', d); };
+            const saveDishes = (d) => { setDishes(d); persistData('dishes', d); };
+            const saveRecipes = (d) => { setRecipes(d); persistData('recipes', d); };
+            const saveStores = (d) => { setStores(d); persistData('stores', d); };
+            const saveMonthlyData = (d) => { setMonthlyData(d); persistData('monthly', d); };
 
-            // --- Analysis Logic ---
             const currentStoreData = useMemo(() => monthlyData[currentMonth] || {}, [monthlyData, currentMonth]);
 
             const analysis = useMemo(() => {
@@ -306,7 +267,6 @@
                 let storeCostMap = {}; 
 
                 if (currentStoreId === 'ALL') {
-                    // Accumulate
                     stores.forEach(store => {
                         const sData = currentStoreData[store.id] || {};
                         const safeAdd = (target, source) => {
@@ -319,7 +279,6 @@
                         safeAdd(targetPurchaseAmount, sData.purchaseAmounts);
                     });
 
-                    // Weighted Costs
                     ingredients.forEach(ing => {
                         let totalCost = 0;
                         let totalQty = 0;
@@ -536,16 +495,15 @@
                     
                     lines.forEach(line => {
                         const parts = parseCSVRow(line);
-                        // Using provided ERP format structure: Index 1=ID, 2=Name, 6=Qty, 8=Unit, 9=TotalValue
-                        if (parts.length < 7) return;
+                        if (parts.length < 9) return;
 
                         const idStr = parts[1] || "";
                         const nameRaw = parts[2] || "";
                         const qty = parseFloat((parts[6] || "0").replace(/,/g, ''));
+                        const unit = parts[8] || "單位"; 
                         const val = parseFloat((parts[9] || "0").replace(/,/g, ''));
-                        const unit = parts[8] || "單位";
 
-                        // 保留代碼與名稱，確保唯一性
+                        // Keep Full Name including [Code]
                         const name = nameRaw.trim(); 
                         if (!name) return;
 
@@ -562,15 +520,14 @@
                             updates.purchase[ing.id] = (updates.purchase[ing.id] || 0) + qty;
                             amountUpdates[ing.id] = (amountUpdates[ing.id] || 0) + val;
                         } else if (idStr.includes('OUT')) {
-                            updates.purchase[ing.id] = (updates.purchase[ing.id] || 0) - qty; // Subtract OUT
-                            amountUpdates[ing.id] = (amountUpdates[ing.id] || 0) - val; // Subtract cost too
+                            updates.purchase[ing.id] = (updates.purchase[ing.id] || 0) - qty;
+                            amountUpdates[ing.id] = (amountUpdates[ing.id] || 0) - val;
                         } else if (idStr.includes('盤點')) {
-                            updates.closing[ing.id] = Math.abs(qty); // Force positive for stock count
+                            updates.closing[ing.id] = Math.abs(qty);
                         }
                         successCount++;
                     });
 
-                    // Update Unit Costs
                     Object.keys(amountUpdates).forEach(ingId => {
                          const totalAmount = amountUpdates[ingId];
                          const totalQty = updates.purchase[ingId];
@@ -653,11 +610,10 @@
                     saveMonthlyData(newMonthlyData);
 
                 } else if (importType === 'sales') {
-                    // POS Sales Import
                     let nameIdx = -1; let qtyIdx = -1;
                     let newDishesToAdd = [];
                     let updates = {};
-                    // Auto-detect header
+                    
                     for (let i = 0; i < Math.min(lines.length, 5); i++) {
                         const parts = parseCSVRow(lines[i]);
                         parts.forEach((col, idx) => {
@@ -666,69 +622,48 @@
                         });
                         if (nameIdx !== -1 && qtyIdx !== -1) break;
                     }
-                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; } // POS fallback
+                    if (nameIdx === -1) { nameIdx = 1; qtyIdx = 4; }
 
                     lines.forEach((line) => {
                         const parts = parseCSVRow(line);
                         if (parts.length > Math.max(nameIdx, qtyIdx)) {
                             const name = parts[nameIdx].trim();
                             const qtyStr = parts[qtyIdx].replace(/,/g, '');
-                            const quantityVal = parseFloat(qtyStr);
-                            
-                            // Check if header row or invalid data
-                            if (['名稱','品名'].some(k => name.includes(k)) || isNaN(quantityVal)) return;
-
+                            const val = parseFloat(qtyStr);
+                            if (['名稱','品名'].some(k => name.includes(k)) || isNaN(val)) return;
                             let dish = dishes.find(d => d.name === name) || newDishesToAdd.find(d => d.name === name);
                             if (!dish) {
                                 dish = { id: `d_auto_${Date.now()}_${newItemCount}`, name: name, price: 0, storeId: 'ALL' };
                                 newDishesToAdd.push(dish);
                                 newItemCount++;
                             }
-                            updates[dish.id] = quantityVal; // Overwrite sales
+                            updates[dish.id] = val;
                             successCount++;
                         }
                     });
                     if (newDishesToAdd.length > 0) saveDishes([...dishes, ...newDishesToAdd]);
-                    const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
-                    if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
-                    if (!newMonthlyData[currentMonth][currentStoreId]) newMonthlyData[currentMonth][currentStoreId] = {};
-                    if (!newMonthlyData[currentMonth][currentStoreId].sales) newMonthlyData[currentMonth][currentStoreId].sales = {};
-                    Object.entries(updates).forEach(([id, qty]) => { newMonthlyData[currentMonth][currentStoreId].sales[id] = qty; });
-                    saveMonthlyData(newMonthlyData);
-                }
-                
-                alert(`匯入完成！成功：${successCount} 筆` + (newItemCount > 0 ? `，新增：${newItemCount} 筆` : ''));
+                    const newData = JSON.parse(JSON.stringify(monthlyData));
+                    if (!newData[currentMonth]) newData[currentMonth] = {};
+                    if (!newData[currentMonth][currentStoreId]) newData[currentMonth][currentStoreId] = {};
+                    if (!newData[currentMonth][currentStoreId].sales) newData[currentMonth][currentStoreId].sales = {};
+                    Object.entries(updates).forEach(([id, qty]) => { newData[currentMonth][currentStoreId].sales[id] = qty; });
+                    saveMonthlyData(newData);
+                } 
+                alert(`匯入完成！成功：${successCount} 筆`);
                 setShowImportModal(false);
             };
 
-            const handleExport = () => {
-                const BOM = "\uFEFF"; 
-                let csvContent = BOM;
-                const storeName = currentStoreId === 'ALL' ? '總部匯總' : stores.find(s => s.id === currentStoreId)?.name || 'Unknown';
-                csvContent += `--- ${storeName} [${currentMonth}] 戰情分析報表 (v5.8.1) ---\n`;
-                csvContent += "食材名稱,採購單位,換算,基礎單位,應用均價,期初(入),進貨(入),期末(入),進貨金額$,實際耗用(基),理論耗用(基),差異$,狀態\n";
-                analysis.ingredientUsage.forEach(row => {
-                    csvContent += `${row.name},${row.unit},${row.capacity},${row.baseUnit},${row.appliedUnitCost.toFixed(4)},${row.openingQty},${row.purchaseQty},${row.closingQty},${row.purchaseAmt},${row.actualUsageQtyBase.toFixed(1)},${row.theoreticalQty.toFixed(1)},${row.varianceCost.toFixed(0)},${row.statusText}\n`;
-                });
-                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-                const link = document.createElement("a");
-                link.href = URL.createObjectURL(blob);
-                link.setAttribute("download", `${storeName}_${currentMonth}_分析報表.csv`);
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            };
+            const handleExport = () => { /* Export logic placeholder */ };
 
             // Filters
             const inputVisibleDishes = useMemo(() => dishes.filter(d => currentStoreId === 'ALL' || !d.storeId || d.storeId === 'ALL' || d.storeId === currentStoreId), [dishes, currentStoreId]);
             const filteredIngredients = useMemo(() => ingredients.filter(i => i.name.includes(ingredientSearch) || (i.alias && i.alias.includes(ingredientSearch))), [ingredients, ingredientSearch]);
 
             return (
-                <div className="min-h-screen flex flex-col md:flex-row">
-                    {/* Sidebar */}
-                    <div className="md:hidden bg-stone-900 text-white p-4 flex justify-between items-center z-50 fixed w-full top-0">
-                        <div className="font-bold flex items-center gap-2"><Icon name="Store" className="text-orange-500" /> 總部戰情</div>
-                        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Icon name="Menu" size={24} /></button>
+                <div className="min-h-screen flex flex-col md:flex-row text-stone-800">
+                    <div className="md:hidden bg-stone-900 text-white p-4 flex justify-between z-20 sticky top-0">
+                        <span className="font-bold flex gap-2"><Icon name="Store" /> 戰情中心</span>
+                        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)}><Icon name="Menu" /></button>
                     </div>
 
                     {isSidebarOpen && <div className="mobile-menu-overlay" onClick={() => setIsSidebarOpen(false)}></div>}
@@ -748,30 +683,25 @@
                             <div className="relative"><Icon name="Calendar" size={16} className="absolute left-2 top-2.5 text-stone-400" /><input type="month" value={currentMonth} onChange={(e) => setCurrentMonth(e.target.value)} className="w-full bg-stone-700 text-white text-sm rounded pl-8 pr-2 py-2 border border-stone-600 focus:border-orange-500 outline-none" /></div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                            <button onClick={() => { setCurrentStoreId('ALL'); setIsSidebarOpen(false); }} className={`w-full text-left px-3 py-2 rounded-md flex items-center justify-between ${currentStoreId === 'ALL' ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-stone-700'}`}><span className="font-bold">🌏 總部匯總 (All)</span></button>
-                            <div className="text-xs text-stone-500 px-2 py-1 mt-4 uppercase font-bold tracking-wider flex justify-between items-center"><span>各門市數據</span><button onClick={addStore} className="hover:text-white" title="新增門市"><Icon name="Plus" size={14} /></button></div>
-                            {stores.map(store => (
-                                <div key={store.id} className="group relative">
-                                    <button onClick={() => { setCurrentStoreId(store.id); setIsSidebarOpen(false); }} className={`w-full text-left px-3 py-2 rounded-md flex items-center justify-between ${currentStoreId === store.id ? 'bg-stone-700 text-white border-l-4 border-orange-500' : 'hover:bg-stone-700 text-stone-400'}`}><span>{store.name}</span></button>
-                                    {currentStoreId === store.id && <button onClick={(e) => { e.stopPropagation(); deleteStore(store.id); }} className="absolute right-2 top-2 text-stone-500 hover:text-red-400"><Icon name="Trash2" size={14} /></button>}
-                                </div>
-                            ))}
+                             <button onClick={() => { setCurrentStoreId('ALL'); setIsSidebarOpen(false); }} className={`w-full text-left px-3 py-2 rounded-md flex items-center justify-between ${currentStoreId === 'ALL' ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-stone-700'}`}><span className="font-bold">🌏 總部匯總 (All)</span></button>
+                             <div className="text-xs text-stone-500 px-2 py-1 mt-4 uppercase font-bold tracking-wider flex justify-between items-center"><span>各門市數據</span><button onClick={addStore} className="hover:text-white" title="新增門市"><Icon name="Plus" size={14} /></button></div>
+                             {stores.map(store => (
+                                 <div key={store.id} className="group relative">
+                                     <button onClick={() => { setCurrentStoreId(store.id); setIsSidebarOpen(false); }} className={`w-full text-left px-3 py-2 rounded-md flex items-center justify-between ${currentStoreId === store.id ? 'bg-stone-700 text-white border-l-4 border-orange-500' : 'hover:bg-stone-700 text-stone-400'}`}><span>{store.name}</span></button>
+                                     {currentStoreId === store.id && <button onClick={(e) => { e.stopPropagation(); deleteStore(store.id); }} className="absolute right-2 top-2 text-stone-500 hover:text-red-400"><Icon name="Trash2" size={14} /></button>}
+                                 </div>
+                             ))}
                         </div>
                     </div>
 
-                    {/* Main Content */}
-                    <div className="flex-1 bg-stone-50 h-screen overflow-y-auto pt-16 md:pt-0">
+                    <div className="flex-1 h-screen overflow-y-auto pt-16 md:pt-0 bg-stone-50">
                         <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6">
-                            {/* Header */}
                             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                                 <div>
-                                    <h2 className="text-2xl font-bold text-stone-800 flex items-center gap-2">{currentStoreId === 'ALL' ? '🌏 全品牌營運總覽' : `🏠 ${stores.find(s => s.id === currentStoreId)?.name} - 營運分析`}<span className="text-sm font-normal text-stone-500 bg-stone-200 px-2 py-1 rounded ml-2">{currentMonth}</span></h2>
-                                    <p className="text-stone-500 text-sm mt-1">{currentStoreId === 'ALL' ? '全品牌營收與成本匯總。' : '單店進銷存與毛利分析。'}</p>
+                                    <h2 className="text-2xl font-bold flex items-center gap-2">{currentStoreId === 'ALL' ? '🌏 全品牌' : stores.find(s => s.id === currentStoreId)?.name} <span className="text-sm bg-stone-200 px-2 rounded font-normal text-stone-600">{currentMonth}</span></h2>
                                 </div>
-                                <div className="flex gap-2"><button onClick={handleExport} className="btn-primary bg-green-600 hover:bg-green-700"><Icon name="Download" size={16} /> 匯出報表</button></div>
                             </div>
 
-                            {/* Tabs */}
                             <div className="flex border-b border-stone-200 overflow-x-auto">
                                 {[{id: 'boss_report', label: '📊 戰情儀表板', icon: 'ClipboardList'}, {id: 'data_input', label: '📝 進銷存輸入', icon: 'FileText'}, {id: 'settings', label: '⚙️ 歸戶與配方', icon: 'ChefHat'}].map(tab => (
                                     <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-6 py-3 border-b-2 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === tab.id ? 'border-orange-500 text-orange-600' : 'border-transparent text-stone-500 hover:text-stone-700'}`}><Icon name={tab.icon} size={16} /> {tab.label}</button>
@@ -889,38 +819,30 @@
                                                                 <tr>
                                                                     <th className="p-2 text-left min-w-[120px]">食材名稱</th>
                                                                     <th className="p-2 text-right">單位</th>
-                                                                    <th className="p-2 text-right">換算</th>
+                                                                    <th className="p-2 text-right">單包份量</th>
                                                                     <th className="p-2 text-right">進貨$</th>
-                                                                    <th className="p-2 text-right">期初</th>
-                                                                    <th className="p-2 text-center text-stone-300">+</th>
-                                                                    <th className="p-2 text-right">進貨(淨)</th>
-                                                                    <th className="p-2 text-center text-stone-300">-</th>
-                                                                    <th className="p-2 text-right">期末</th>
-                                                                    <th className="p-2 text-center text-stone-300">=</th>
-                                                                    <th className="p-2 text-right text-blue-600">耗用</th>
+                                                                    <th className="p-2 text-right">淨進貨量</th>
+                                                                    <th className="p-2 text-right">期末盤點</th>
+                                                                    <th className="p-2 text-right text-blue-600">本月耗用</th>
                                                                     <th className="p-2 text-center">操作</th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="divide-y divide-stone-100">
                                                                 {ingredients.map(ing => {
                                                                     const sData = currentStoreData[currentStoreId] || {};
-                                                                    const open = sData.opening?.[ing.id] || 0;
                                                                     const pur = sData.purchase?.[ing.id] || 0;
                                                                     const close = sData.closing?.[ing.id] || 0;
                                                                     const purAmt = sData.purchaseAmounts?.[ing.id] || 0;
-                                                                    const used = open + pur - close;
+                                                                    const used = pur - close;
+                                                                    
                                                                     return (
                                                                         <tr key={ing.id} className="hover:bg-stone-50">
                                                                             <td className="p-2 font-medium">{ing.name} <div className="text-[10px] text-stone-400">{ing.alias}</div></td>
                                                                             <td className="p-2 text-right text-xs text-stone-500">{ing.unit}</td>
                                                                             <td className="p-2 text-right text-xs text-stone-500"><input type="number" className="w-12 text-center border rounded bg-yellow-50" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} /></td>
-                                                                            <td className="p-2 text-right text-xs text-stone-500">${purAmt.toLocaleString()}</td>
-                                                                            <td className="p-2"><input type="number" className="input-cell" value={open} onChange={(e) => updateStoreData(currentStoreId, 'opening', ing.id, e.target.value)} /></td>
-                                                                            <td className="p-2 text-center text-stone-300">+</td>
+                                                                            <td className="p-2 text-right text-xs text-stone-500 font-mono">${purAmt.toLocaleString()}</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-blue-50/50 border-blue-200" value={pur} onChange={(e) => updateStoreData(currentStoreId, 'purchase', ing.id, e.target.value)} /></td>
-                                                                            <td className="p-2 text-center text-stone-300">-</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-green-50/50 border-green-200" value={close} onChange={(e) => updateStoreData(currentStoreId, 'closing', ing.id, e.target.value)} /></td>
-                                                                            <td className="p-2 text-center text-stone-300">=</td>
                                                                             <td className="p-2 text-right font-bold text-blue-700">{used.toFixed(2)}</td>
                                                                             <td className="p-2 text-center"><button onClick={() => deleteIngredient(ing.id)} className="btn-danger-icon"><Icon name="Trash2" size={16}/></button></td>
                                                                         </tr>
@@ -930,7 +852,8 @@
                                                         </table>
                                                     </div>
                                                 </div>
-
+                                                
+                                                {/* Sales Section */}
                                                 <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
                                                     <div className="px-6 py-4 bg-green-50 border-b border-green-100 flex justify-between items-center">
                                                         <div><h3 className="font-bold text-green-900">🍽️ 銷售數據</h3></div>
@@ -965,24 +888,22 @@
                                             <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="font-bold text-lg text-stone-800">總部統一食材庫</h3><button onClick={() => openImportModal('ingredients')} className="btn-outline"><Icon name="Upload" size={16} /> 批次匯入</button></div>
                                             <div className="space-y-2 mb-4 overflow-x-auto">
                                                 <div className="grid grid-cols-12 gap-2 text-xs font-bold text-stone-500 px-1 mb-2 min-w-[800px]">
-                                                    <div className="col-span-2">系統名稱</div>
-                                                    <div className="col-span-2">ERP 別名</div>
+                                                    <div className="col-span-3">系統名稱 (ERP品名)</div>
                                                     <div className="col-span-1">採購單位</div>
-                                                    <div className="col-span-2 text-center bg-yellow-50 rounded">換算</div>
+                                                    <div className="col-span-2 text-center bg-yellow-50 rounded">換算容量</div>
                                                     <div className="col-span-1">基礎單位</div>
                                                     <div className="col-span-2 text-right">基礎單價</div>
-                                                    <div className="col-span-1">備註</div>
+                                                    <div className="col-span-2">備註</div>
                                                     <div className="col-span-1 text-center">操作</div>
                                                 </div>
                                                 {ingredients.map(ing => (
                                                     <div key={ing.id} className="grid grid-cols-12 gap-2 items-center min-w-[800px] border-b pb-1 last:border-0">
-                                                        <input value={ing.name} onChange={(e) => updateIngredient(ing.id, 'name', e.target.value)} className="col-span-2 border p-1 rounded font-bold" />
-                                                        <input value={ing.alias || ''} onChange={(e) => updateIngredient(ing.id, 'alias', e.target.value)} className="col-span-2 border p-1 rounded bg-stone-50" />
+                                                        <input value={ing.name} onChange={(e) => updateIngredient(ing.id, 'name', e.target.value)} className="col-span-3 border p-1 rounded font-bold" />
                                                         <input value={ing.unit} onChange={(e) => updateIngredient(ing.id, 'unit', e.target.value)} className="col-span-1 border p-1 rounded text-center" />
                                                         <input type="number" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} className="col-span-2 border p-1 rounded text-center bg-yellow-50" />
                                                         <input value={ing.baseUnit || '單位'} onChange={(e) => updateIngredient(ing.id, 'baseUnit', e.target.value)} className="col-span-1 border p-1 rounded text-center" />
                                                         <input type="number" value={ing.unitCost} onChange={(e) => updateIngredient(ing.id, 'unitCost', e.target.value)} className="col-span-2 border p-1 rounded text-right" />
-                                                        <input value={ing.note || ''} onChange={(e) => updateIngredient(ing.id, 'note', e.target.value)} className="col-span-1 border p-1 rounded text-xs" />
+                                                        <input value={ing.note || ''} onChange={(e) => updateIngredient(ing.id, 'note', e.target.value)} className="col-span-2 border p-1 rounded text-xs" />
                                                         <div className="col-span-1 text-center"><button onClick={() => deleteIngredient(ing.id)} className="btn-danger-icon"><Icon name="Trash2" size={16}/></button></div>
                                                     </div>
                                                 ))}
