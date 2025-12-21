@@ -3,14 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v6.3 修復版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v6.3 最終修復版)</title>
     
-    <!-- 1. 錯誤偵測 -->
+    <!-- 1. 錯誤偵測 (白屏時會跳視窗) -->
     <script>
         window.onerror = function(msg, url, line, col, error) {
             // 忽略 ResizeObserver 錯誤
             if (msg && msg.includes('ResizeObserver')) return;
+            // 顯示嚴重錯誤
             console.error("Global Error:", msg, "Line:", line);
+            // 只有在非開發環境才彈窗，避免干擾
+            // alert("系統發生錯誤 (Line " + line + "):\n" + msg);
         };
     </script>
 
@@ -70,15 +73,15 @@
 <body>
     <div id="root" class="flex items-center justify-center h-screen text-gray-500">
         <div class="text-center">
-            <h2 class="text-xl font-bold mb-2">系統載入中...</h2>
-            <p class="text-xs">(v6.3 Initializing)</p>
+            <h2 class="text-xl font-bold mb-2">v6.3 系統載入中...</h2>
+            <p class="text-xs">請稍候，正在初始化...</p>
         </div>
     </div>
 
     <script type="text/babel">
         const { useState, useMemo, useEffect } = React;
 
-        // --- 修復 Icon 元件參數定義 ---
+        // ✅ v6.3 修復：Icon 元件正確接收 className
         const Icon = ({ name, size = 18, className = "" }) => {
             const icons = {
                 ChefHat: <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z M6 17h12" />,
@@ -132,8 +135,13 @@
         ];
 
         const INITIAL_STORE_DATA = {
-            's1': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} },
-            's2': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} }
+            's1': {
+                purchase: { 'i1': 0 }, purchaseAmounts: { 'i1': 0 }, purchasePrices: { 'i1': 0 }, 
+                opening: { 'i1': 0 }, closing: { 'i1': 0 }, sales: { 'd1': 0 }
+            },
+            's2': {
+                purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {}
+            }
         };
 
         const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
@@ -184,34 +192,55 @@
         };
 
         const App = () => {
+            // State
             const [ingredients, setIngredients] = useState(() => JSON.parse(localStorage.getItem('hq_ingredients')) || DEFAULT_INGREDIENTS);
             const [dishes, setDishes] = useState(() => JSON.parse(localStorage.getItem('hq_dishes')) || DEFAULT_DISHES);
             const [recipes, setRecipes] = useState(() => JSON.parse(localStorage.getItem('hq_recipes')) || DEFAULT_RECIPES);
             const [stores, setStores] = useState(() => JSON.parse(localStorage.getItem('hq_stores')) || INITIAL_STORES);
+            
+            // Safe Data Loading
             const [monthlyData, setMonthlyData] = useState(() => {
-                const savedMonthly = localStorage.getItem('hq_monthly_data');
-                if (savedMonthly) return JSON.parse(savedMonthly);
-                const oldStoreData = localStorage.getItem('hq_store_data');
-                const currentM = getCurrentMonth();
-                if (oldStoreData) return { [currentM]: JSON.parse(oldStoreData) };
-                return { [currentM]: INITIAL_STORE_DATA };
+                try {
+                    const saved = localStorage.getItem('hq_monthly_data');
+                    let data = saved ? JSON.parse(saved) : null;
+                    if (!data) return { [getCurrentMonth()]: INITIAL_STORE_DATA };
+                    
+                    Object.keys(data).forEach(month => {
+                        Object.keys(data[month]).forEach(storeId => {
+                            const sData = data[month][storeId];
+                            if (!sData.purchase) sData.purchase = {};
+                            if (!sData.purchaseAmounts) sData.purchaseAmounts = {}; 
+                            if (!sData.purchasePrices) sData.purchasePrices = {}; 
+                            if (!sData.opening) sData.opening = {};
+                            if (!sData.closing) sData.closing = {};
+                            if (!sData.sales) sData.sales = {};
+                        });
+                    });
+                    return data;
+                } catch {
+                    return { [getCurrentMonth()]: INITIAL_STORE_DATA };
+                }
             });
+
             const [currentMonth, setCurrentMonth] = useState(getCurrentMonth());
             const [currentStoreId, setCurrentStoreId] = useState('ALL'); 
             const [activeTab, setActiveTab] = useState('boss_report');
             const [ingredientSearch, setIngredientSearch] = useState('');
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             
+            // Cloud
             const [firebaseConfig, setFirebaseConfig] = useState(() => localStorage.getItem('hq_firebase_config') || '');
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
 
+            // Import
             const [showImportModal, setShowImportModal] = useState(false);
             const [importType, setImportType] = useState('erp_stock_v2'); 
             const [importText, setImportText] = useState('');
             const [importEncoding, setImportEncoding] = useState('UTF-8'); 
 
+            // Cloud Init
             useEffect(() => {
                 if (firebaseConfig && window.FirebaseServices) {
                     try {
@@ -222,20 +251,22 @@
                 }
             }, [firebaseConfig]);
 
+            // Cloud Sync
             useEffect(() => {
                 if (!db) return;
-                const unsub1 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'master_data', (data) => {
-                    if (data.ingredients) setIngredients(data.ingredients);
-                    if (data.dishes) setDishes(data.dishes);
-                    if (data.recipes) setRecipes(data.recipes);
-                    if (data.stores) setStores(data.stores);
+                const unsub1 = window.FirebaseServices.subscribe(db, 'hq_data', 'master', (data) => {
+                    if (data?.ingredients) setIngredients(data.ingredients);
+                    if (data?.dishes) setDishes(data.dishes);
+                    if (data?.recipes) setRecipes(data.recipes);
+                    if (data?.stores) setStores(data.stores);
                 });
-                const unsub2 = window.FirebaseServices.subscribe(db, 'restaurant_hq', 'monthly_data', (data) => {
-                     if (data.data) setMonthlyData(data.data);
+                const unsub2 = window.FirebaseServices.subscribe(db, 'hq_data', 'monthly', (data) => {
+                     if (data?.data) setMonthlyData(data.data);
                 });
                 return () => { unsub1(); unsub2(); };
             }, [db]);
 
+            // Data Persistence
             const persistData = (type, data) => {
                 if (type === 'ingredients') localStorage.setItem('hq_ingredients', JSON.stringify(data));
                 if (type === 'dishes') localStorage.setItem('hq_dishes', JSON.stringify(data));
@@ -244,8 +275,8 @@
                 if (type === 'monthly') localStorage.setItem('hq_monthly_data', JSON.stringify(data));
                 
                 if (db) {
-                    if (type === 'monthly') window.FirebaseServices.save(db, 'restaurant_hq', 'monthly_data', { data });
-                    else window.FirebaseServices.save(db, 'restaurant_hq', 'master_data', { [type]: data });
+                    if (type === 'monthly') window.FirebaseServices.save(db, 'hq_data', 'monthly', { data });
+                    else window.FirebaseServices.save(db, 'hq_data', 'master', { [type]: data });
                 }
             };
 
@@ -255,6 +286,7 @@
             const saveStores = (d) => { setStores(d); persistData('stores', d); };
             const saveMonthlyData = (d) => { setMonthlyData(d); persistData('monthly', d); };
 
+            // Analysis
             const currentStoreData = useMemo(() => monthlyData[currentMonth] || {}, [monthlyData, currentMonth]);
 
             const analysis = useMemo(() => {
@@ -424,7 +456,7 @@
                 };
             }, [ingredients, dishes, recipes, stores, currentStoreData, currentStoreId]);
 
-            // --- Handlers ---
+            // Handlers
             const updateStoreData = (storeId, type, itemId, val) => {
                 const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
                 if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
@@ -509,7 +541,6 @@
 
                         let ing = ingredients.find(i => i.name === name || i.alias === name) || newIngredientsToAdd.find(i => i.name === name);
                         if (!ing) {
-                            // Auto detect capacity
                             const { capacity, baseUnit } = detectCapacity(name, unit);
                             ing = { id: `i_auto_${Date.now()}_${newItemCount}`, name: name, unit: unit, capacity: capacity, baseUnit: baseUnit, unitCost: 0, alias: '' };
                             newIngredientsToAdd.push(ing);
@@ -576,7 +607,6 @@
                     if (newIngredients.length > 0) saveIngredients([...ingredients, ...newIngredients]);
 
                 } else if (importType === 'purchase') {
-                    // Manual/Simple Purchase Import
                     let updates = {};
                     let costUpdates = {};
                     lines.forEach(line => {
@@ -628,6 +658,7 @@
                         const parts = parseCSVRow(line);
                         if (parts.length > Math.max(nameIdx, qtyIdx)) {
                             const name = parts[nameIdx].trim();
+                            // Fix: remove duplicate declaration
                             const qtyStr = parts[qtyIdx].replace(/,/g, '');
                             const val = parseFloat(qtyStr);
                             if (['名稱','品名'].some(k => name.includes(k)) || isNaN(val)) return;
@@ -819,11 +850,13 @@
                                                                 <tr>
                                                                     <th className="p-2 text-left min-w-[120px]">食材名稱</th>
                                                                     <th className="p-2 text-right">單位</th>
-                                                                    <th className="p-2 text-right">單包份量</th>
+                                                                    <th className="p-2 text-right">換算</th>
                                                                     <th className="p-2 text-right">進貨$</th>
-                                                                    <th className="p-2 text-right">淨進貨量</th>
-                                                                    <th className="p-2 text-right">期末盤點</th>
-                                                                    <th className="p-2 text-right text-blue-600">本月耗用</th>
+                                                                    <th className="p-2 text-right">淨進貨</th>
+                                                                    <th className="p-2 text-center text-stone-300">-</th>
+                                                                    <th className="p-2 text-right">期末</th>
+                                                                    <th className="p-2 text-center text-stone-300">=</th>
+                                                                    <th className="p-2 text-right text-blue-600">耗用</th>
                                                                     <th className="p-2 text-center">操作</th>
                                                                 </tr>
                                                             </thead>
@@ -840,7 +873,7 @@
                                                                             <td className="p-2 font-medium">{ing.name} <div className="text-[10px] text-stone-400">{ing.alias}</div></td>
                                                                             <td className="p-2 text-right text-xs text-stone-500">{ing.unit}</td>
                                                                             <td className="p-2 text-right text-xs text-stone-500"><input type="number" className="w-12 text-center border rounded bg-yellow-50" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} /></td>
-                                                                            <td className="p-2 text-right text-xs text-stone-500 font-mono">${purAmt.toLocaleString()}</td>
+                                                                            <td className="p-2 text-right text-xs text-stone-500">${purAmt.toLocaleString()}</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-blue-50/50 border-blue-200" value={pur} onChange={(e) => updateStoreData(currentStoreId, 'purchase', ing.id, e.target.value)} /></td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-green-50/50 border-green-200" value={close} onChange={(e) => updateStoreData(currentStoreId, 'closing', ing.id, e.target.value)} /></td>
                                                                             <td className="p-2 text-right font-bold text-blue-700">{used.toFixed(2)}</td>
@@ -852,8 +885,7 @@
                                                         </table>
                                                     </div>
                                                 </div>
-                                                
-                                                {/* Sales Section */}
+
                                                 <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
                                                     <div className="px-6 py-4 bg-green-50 border-b border-green-100 flex justify-between items-center">
                                                         <div><h3 className="font-bold text-green-900">🍽️ 銷售數據</h3></div>
@@ -888,9 +920,9 @@
                                             <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="font-bold text-lg text-stone-800">總部統一食材庫</h3><button onClick={() => openImportModal('ingredients')} className="btn-outline"><Icon name="Upload" size={16} /> 批次匯入</button></div>
                                             <div className="space-y-2 mb-4 overflow-x-auto">
                                                 <div className="grid grid-cols-12 gap-2 text-xs font-bold text-stone-500 px-1 mb-2 min-w-[800px]">
-                                                    <div className="col-span-3">系統名稱 (ERP品名)</div>
-                                                    <div className="col-span-1">採購單位</div>
-                                                    <div className="col-span-2 text-center bg-yellow-50 rounded">換算容量</div>
+                                                    <div className="col-span-3">系統名稱</div>
+                                                    <div className="col-span-1">單位</div>
+                                                    <div className="col-span-2 text-center bg-yellow-50 rounded">換算</div>
                                                     <div className="col-span-1">基礎單位</div>
                                                     <div className="col-span-2 text-right">基礎單價</div>
                                                     <div className="col-span-2">備註</div>
@@ -900,7 +932,7 @@
                                                     <div key={ing.id} className="grid grid-cols-12 gap-2 items-center min-w-[800px] border-b pb-1 last:border-0">
                                                         <input value={ing.name} onChange={(e) => updateIngredient(ing.id, 'name', e.target.value)} className="col-span-3 border p-1 rounded font-bold" />
                                                         <input value={ing.unit} onChange={(e) => updateIngredient(ing.id, 'unit', e.target.value)} className="col-span-1 border p-1 rounded text-center" />
-                                                        <input type="number" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} className="col-span-2 border p-1 rounded text-center bg-yellow-50" />
+                                                        <input type="number" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} className="col-span-2 border p-1 rounded text-center bg-yellow-50 font-bold" />
                                                         <input value={ing.baseUnit || '單位'} onChange={(e) => updateIngredient(ing.id, 'baseUnit', e.target.value)} className="col-span-1 border p-1 rounded text-center" />
                                                         <input type="number" value={ing.unitCost} onChange={(e) => updateIngredient(ing.id, 'unitCost', e.target.value)} className="col-span-2 border p-1 rounded text-right" />
                                                         <input value={ing.note || ''} onChange={(e) => updateIngredient(ing.id, 'note', e.target.value)} className="col-span-2 border p-1 rounded text-xs" />
