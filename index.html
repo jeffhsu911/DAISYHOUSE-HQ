@@ -3,31 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v6.3 最終修復版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v7.0 救援版)</title>
     
-    <!-- 1. 錯誤偵測 (白屏時會跳視窗) -->
+    <!-- 0. 錯誤攔截 (最優先載入) -->
     <script>
         window.onerror = function(msg, url, line, col, error) {
-            // 忽略 ResizeObserver 錯誤
-            if (msg && msg.includes('ResizeObserver')) return;
-            // 顯示嚴重錯誤
-            console.error("Global Error:", msg, "Line:", line);
-            // 只有在非開發環境才彈窗，避免干擾
-            // alert("系統發生錯誤 (Line " + line + "):\n" + msg);
+            var errorBox = document.getElementById('error-box');
+            if (errorBox) {
+                errorBox.style.display = 'block';
+                errorBox.innerHTML += "<p>🔴 錯誤: " + msg + " (Line: " + line + ")</p>";
+            }
+            console.error("Global Error:", msg);
         };
     </script>
 
-    <!-- 2. 引入 React 和 Tailwind -->
+    <!-- 1. 引入 React 和 Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- 3. 引入 Firebase SDK (Compat) -->
+    <!-- 2. 引入 Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
     <script>
+        // 初始化 Firebase
         window.FirebaseServices = {
             init: (rawConfig) => {
                 try {
@@ -71,17 +72,32 @@
     </style>
 </head>
 <body>
-    <div id="root" class="flex items-center justify-center h-screen text-gray-500">
-        <div class="text-center">
-            <h2 class="text-xl font-bold mb-2">v6.3 系統載入中...</h2>
-            <p class="text-xs">請稍候，正在初始化...</p>
-        </div>
+    <!-- 載入中與錯誤顯示區 -->
+    <div id="loading-screen" class="flex flex-col items-center justify-center h-screen text-gray-600">
+        <h2 class="text-2xl font-bold mb-4">v7.0 系統載入中...</h2>
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-4"></div>
+        <p class="text-sm mb-4">如果超過 5 秒未進入，請點擊下方按鈕修復</p>
+        <button onclick="localStorage.clear(); window.location.reload();" class="px-4 py-2 bg-red-500 text-white rounded shadow hover:bg-red-600 text-sm">
+            ⚠️ 強制重置系統 (修復白屏)
+        </button>
+        <div id="error-box" class="mt-4 p-4 bg-red-100 text-red-700 text-xs rounded hidden max-w-lg text-left"></div>
     </div>
 
+    <div id="root" style="display:none;"></div>
+
     <script type="text/babel">
+        // 顯示 Root, 隱藏 Loading
+        setTimeout(() => {
+            const rootEl = document.getElementById('root');
+            const loadEl = document.getElementById('loading-screen');
+            if (rootEl && loadEl) {
+                rootEl.style.display = 'block';
+                loadEl.style.display = 'none';
+            }
+        }, 1000); // 延遲顯示確保 React 掛載
+
         const { useState, useMemo, useEffect } = React;
 
-        // ✅ v6.3 修復：Icon 元件正確接收 className
         const Icon = ({ name, size = 18, className = "" }) => {
             const icons = {
                 ChefHat: <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z M6 17h12" />,
@@ -116,37 +132,17 @@
             );
         };
 
-        // --- 預設數據 ---
-        const DEFAULT_INGREDIENTS = [
-            { id: 'i1', name: "範例: [A001] 漢堡肉排", alias: "冷凍牛肉餅(箱)", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "每箱50片" }
-        ];
-
-        const DEFAULT_DISHES = [
-            { id: 'd1', name: "經典起司堡", price: 150, storeId: 'ALL' }
-        ];
-
-        const DEFAULT_RECIPES = [
-            { dishId: 'd1', ingredientId: 'i1', amount: 1 }
-        ];
-
-        const INITIAL_STORES = [
-            { id: 's1', name: '台北總店' },
-            { id: 's2', name: '高雄分店' }
-        ];
-
+        const DEFAULT_INGREDIENTS = [{ id: 'i1', name: "[A001] 漢堡肉排", unit: "箱", capacity: 50, baseUnit: "片", unitCost: 25, note: "範例" }];
+        const DEFAULT_DISHES = [{ id: 'd1', name: "經典起司堡", price: 150, storeId: 'ALL' }];
+        const DEFAULT_RECIPES = [{ dishId: 'd1', ingredientId: 'i1', amount: 1 }];
+        const INITIAL_STORES = [{ id: 's1', name: '台北總店' }, { id: 's2', name: '高雄分店' }];
         const INITIAL_STORE_DATA = {
-            's1': {
-                purchase: { 'i1': 0 }, purchaseAmounts: { 'i1': 0 }, purchasePrices: { 'i1': 0 }, 
-                opening: { 'i1': 0 }, closing: { 'i1': 0 }, sales: { 'd1': 0 }
-            },
-            's2': {
-                purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {}
-            }
+            's1': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} },
+            's2': { purchase: {}, purchaseAmounts: {}, purchasePrices: {}, opening: {}, closing: {}, sales: {} }
         };
 
         const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
 
-        // --- CSV Parser ---
         const parseCSVRow = (text) => {
             const result = [];
             let startValueIndex = 0;
@@ -178,7 +174,6 @@
             if (['l', '公升', 'liter'].includes(u)) return { capacity: 1000, baseUnit: 'ml' };
             if (['ml', '毫升', 'cc'].includes(u)) return { capacity: 1, baseUnit: 'ml' };
             if (['lb', '磅', 'pound'].includes(u)) return { capacity: 454, baseUnit: 'g' };
-
             const weightMatch = name.match(/(\d+(\.\d+)?)\s*(KG|kg|G|g|ML|ml|L|l)/i);
             if (weightMatch) {
                 const val = parseFloat(weightMatch[1]);
@@ -198,7 +193,6 @@
             const [recipes, setRecipes] = useState(() => JSON.parse(localStorage.getItem('hq_recipes')) || DEFAULT_RECIPES);
             const [stores, setStores] = useState(() => JSON.parse(localStorage.getItem('hq_stores')) || INITIAL_STORES);
             
-            // Safe Data Loading
             const [monthlyData, setMonthlyData] = useState(() => {
                 try {
                     const saved = localStorage.getItem('hq_monthly_data');
@@ -228,19 +222,15 @@
             const [ingredientSearch, setIngredientSearch] = useState('');
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             
-            // Cloud
             const [firebaseConfig, setFirebaseConfig] = useState(() => localStorage.getItem('hq_firebase_config') || '');
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
-
-            // Import
             const [showImportModal, setShowImportModal] = useState(false);
             const [importType, setImportType] = useState('erp_stock_v2'); 
             const [importText, setImportText] = useState('');
             const [importEncoding, setImportEncoding] = useState('UTF-8'); 
 
-            // Cloud Init
             useEffect(() => {
                 if (firebaseConfig && window.FirebaseServices) {
                     try {
@@ -251,7 +241,6 @@
                 }
             }, [firebaseConfig]);
 
-            // Cloud Sync
             useEffect(() => {
                 if (!db) return;
                 const unsub1 = window.FirebaseServices.subscribe(db, 'hq_data', 'master', (data) => {
@@ -266,14 +255,12 @@
                 return () => { unsub1(); unsub2(); };
             }, [db]);
 
-            // Data Persistence
             const persistData = (type, data) => {
                 if (type === 'ingredients') localStorage.setItem('hq_ingredients', JSON.stringify(data));
                 if (type === 'dishes') localStorage.setItem('hq_dishes', JSON.stringify(data));
                 if (type === 'recipes') localStorage.setItem('hq_recipes', JSON.stringify(data));
                 if (type === 'stores') localStorage.setItem('hq_stores', JSON.stringify(data));
                 if (type === 'monthly') localStorage.setItem('hq_monthly_data', JSON.stringify(data));
-                
                 if (db) {
                     if (type === 'monthly') window.FirebaseServices.save(db, 'hq_data', 'monthly', { data });
                     else window.FirebaseServices.save(db, 'hq_data', 'master', { [type]: data });
@@ -286,7 +273,6 @@
             const saveStores = (d) => { setStores(d); persistData('stores', d); };
             const saveMonthlyData = (d) => { setMonthlyData(d); persistData('monthly', d); };
 
-            // Analysis
             const currentStoreData = useMemo(() => monthlyData[currentMonth] || {}, [monthlyData, currentMonth]);
 
             const analysis = useMemo(() => {
@@ -310,7 +296,6 @@
                         safeAdd(targetSales, sData.sales);
                         safeAdd(targetPurchaseAmount, sData.purchaseAmounts);
                     });
-
                     ingredients.forEach(ing => {
                         let totalCost = 0;
                         let totalQty = 0;
@@ -326,7 +311,6 @@
                         });
                         weightedCosts[ing.id] = totalQty > 0 ? (totalCost / totalQty) : ing.unitCost; 
                     });
-
                 } else {
                     const sData = currentStoreData[currentStoreId] || {};
                     targetPurchase = sData.purchase || {};
@@ -527,15 +511,14 @@
                     
                     lines.forEach(line => {
                         const parts = parseCSVRow(line);
-                        if (parts.length < 9) return;
+                        if (parts.length < 7) return;
 
                         const idStr = parts[1] || "";
                         const nameRaw = parts[2] || "";
                         const qty = parseFloat((parts[6] || "0").replace(/,/g, ''));
-                        const unit = parts[8] || "單位"; 
                         const val = parseFloat((parts[9] || "0").replace(/,/g, ''));
+                        const unit = parts[8] || "單位";
 
-                        // Keep Full Name including [Code]
                         const name = nameRaw.trim(); 
                         if (!name) return;
 
@@ -559,6 +542,7 @@
                         successCount++;
                     });
 
+                    // Update Unit Costs: Total Amount / Total Net Qty / Capacity
                     Object.keys(amountUpdates).forEach(ingId => {
                          const totalAmount = amountUpdates[ingId];
                          const totalQty = updates.purchase[ingId];
@@ -571,14 +555,9 @@
                     });
 
                     if (newIngredientsToAdd.length > 0) {
-                         saveIngredients((prev) => {
-                             const all = [...prev, ...newIngredientsToAdd];
-                             return all.map(ing => costUpdates[ing.id] ? { ...ing, unitCost: costUpdates[ing.id] } : ing);
-                         });
-                    } else if (Object.keys(costUpdates).length > 0) {
-                        saveIngredients(ingredients.map(ing => costUpdates[ing.id] ? { ...ing, unitCost: costUpdates[ing.id] } : ing));
+                         saveIngredients([...ingredients, ...newIngredientsToAdd]);
                     }
-
+                    
                     const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
                     if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
                     if (!newMonthlyData[currentMonth][currentStoreId]) newMonthlyData[currentMonth][currentStoreId] = {};
@@ -643,7 +622,6 @@
                     let nameIdx = -1; let qtyIdx = -1;
                     let newDishesToAdd = [];
                     let updates = {};
-                    
                     for (let i = 0; i < Math.min(lines.length, 5); i++) {
                         const parts = parseCSVRow(lines[i]);
                         parts.forEach((col, idx) => {
@@ -658,7 +636,6 @@
                         const parts = parseCSVRow(line);
                         if (parts.length > Math.max(nameIdx, qtyIdx)) {
                             const name = parts[nameIdx].trim();
-                            // Fix: remove duplicate declaration
                             const qtyStr = parts[qtyIdx].replace(/,/g, '');
                             const val = parseFloat(qtyStr);
                             if (['名稱','品名'].some(k => name.includes(k)) || isNaN(val)) return;
@@ -673,20 +650,19 @@
                         }
                     });
                     if (newDishesToAdd.length > 0) saveDishes([...dishes, ...newDishesToAdd]);
-                    const newData = JSON.parse(JSON.stringify(monthlyData));
-                    if (!newData[currentMonth]) newData[currentMonth] = {};
-                    if (!newData[currentMonth][currentStoreId]) newData[currentMonth][currentStoreId] = {};
-                    if (!newData[currentMonth][currentStoreId].sales) newData[currentMonth][currentStoreId].sales = {};
-                    Object.entries(updates).forEach(([id, qty]) => { newData[currentMonth][currentStoreId].sales[id] = qty; });
-                    saveMonthlyData(newData);
+                    const newMonthlyData = JSON.parse(JSON.stringify(monthlyData));
+                    if (!newMonthlyData[currentMonth]) newMonthlyData[currentMonth] = {};
+                    if (!newMonthlyData[currentMonth][currentStoreId]) newMonthlyData[currentMonth][currentStoreId] = {};
+                    if (!newMonthlyData[currentMonth][currentStoreId].sales) newMonthlyData[currentMonth][currentStoreId].sales = {};
+                    Object.entries(updates).forEach(([id, qty]) => { newMonthlyData[currentMonth][currentStoreId].sales[id] = qty; });
+                    saveMonthlyData(newMonthlyData);
                 } 
                 alert(`匯入完成！成功：${successCount} 筆`);
                 setShowImportModal(false);
             };
 
-            const handleExport = () => { /* Export logic placeholder */ };
+            const handleExport = () => { /* Simplified */ };
 
-            // Filters
             const inputVisibleDishes = useMemo(() => dishes.filter(d => currentStoreId === 'ALL' || !d.storeId || d.storeId === 'ALL' || d.storeId === currentStoreId), [dishes, currentStoreId]);
             const filteredIngredients = useMemo(() => ingredients.filter(i => i.name.includes(ingredientSearch) || (i.alias && i.alias.includes(ingredientSearch))), [ingredients, ingredientSearch]);
 
@@ -838,7 +814,7 @@
                                             <div className="grid grid-cols-1 gap-6">
                                                 <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
                                                     <div className="px-6 py-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
-                                                        <div><h3 className="font-bold text-blue-900">📦 進銷存數據輸入</h3><p className="text-xs text-blue-600">期初 + 進貨 - 期末 = 耗用</p></div>
+                                                        <div><h3 className="font-bold text-blue-900">📦 進銷存數據輸入</h3><p className="text-xs text-blue-600">IN - OUT = 淨進貨</p></div>
                                                         <div className="flex gap-2">
                                                             <button onClick={() => clearSection('inventory')} className="text-stone-400 hover:text-red-500 p-2" title="清空本月進銷存數據"><Icon name="Trash2" size={18}/></button>
                                                             <button onClick={() => openImportModal('erp_stock_v2')} className="btn-outline text-blue-600 border-blue-200 hover:bg-blue-50"><Icon name="Upload" size={14} /> 匯入 ERP (庫存估值表)</button>
@@ -852,11 +828,9 @@
                                                                     <th className="p-2 text-right">單位</th>
                                                                     <th className="p-2 text-right">換算</th>
                                                                     <th className="p-2 text-right">進貨$</th>
-                                                                    <th className="p-2 text-right">淨進貨</th>
-                                                                    <th className="p-2 text-center text-stone-300">-</th>
-                                                                    <th className="p-2 text-right">期末</th>
-                                                                    <th className="p-2 text-center text-stone-300">=</th>
-                                                                    <th className="p-2 text-right text-blue-600">耗用</th>
+                                                                    <th className="p-2 text-right">淨進貨量</th>
+                                                                    <th className="p-2 text-right">期末盤點</th>
+                                                                    <th className="p-2 text-right text-blue-600">本月耗用</th>
                                                                     <th className="p-2 text-center">操作</th>
                                                                 </tr>
                                                             </thead>
