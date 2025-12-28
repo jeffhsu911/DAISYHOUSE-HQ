@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v7.2 連線修復版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v7.3 最終救援版)</title>
     
-    <!-- 0. 錯誤攔截 -->
+    <!-- 0. 錯誤攔截 (最優先載入) -->
     <script>
         window.onerror = function(msg, url, line, col, error) {
             if (msg && msg.includes('ResizeObserver')) return;
@@ -43,9 +43,6 @@
                     if (!firebase.apps.length) {
                         firebase.initializeApp(config);
                     } else {
-                        // 如果已經初始化過，這裡直接回傳現有的 firestore
-                        // 注意：Firebase Web SDK 不支援在同一頁面重新初始化不同專案，除非刪除 App。
-                        // 為了簡單起見，若要換專案建議重新整理頁面。
                         return firebase.firestore();
                     }
                     return firebase.firestore();
@@ -103,7 +100,7 @@
 <body>
     <!-- 載入中與錯誤顯示區 -->
     <div id="loading-screen" class="flex flex-col items-center justify-center h-screen text-gray-600">
-        <h2 class="text-2xl font-bold mb-4">v7.2 系統載入中...</h2>
+        <h2 class="text-2xl font-bold mb-4">v7.3 系統載入中...</h2>
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-4"></div>
         <p class="text-sm mb-4">如果超過 5 秒未進入，請點擊下方按鈕修復</p>
         <button onclick="localStorage.clear(); window.location.reload();" class="px-4 py-2 bg-red-500 text-white rounded shadow hover:bg-red-600 text-sm">
@@ -127,7 +124,12 @@
 
         const { useState, useMemo, useEffect } = React;
 
-        const Icon = ({ name, size = 18, className = "" }) => {
+        // ✅ v7.3 修復：改用 props 傳統寫法，避免解構賦值錯誤
+        const Icon = (props) => {
+            const name = props.name;
+            const size = props.size || 18;
+            const className = props.className || "";
+
             const icons = {
                 ChefHat: <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z M6 17h12" />,
                 Utensils: <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2 M7 2v20 M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />,
@@ -805,7 +807,7 @@
                                                         <div><h3 className="font-bold text-blue-900">📦 進銷存數據輸入</h3><p className="text-xs text-blue-600">IN - OUT = 淨進貨</p></div>
                                                         <div className="flex gap-2">
                                                             <button onClick={() => clearSection('inventory')} className="text-stone-400 hover:text-red-500 p-2" title="清空本月進銷存數據"><Icon name="Trash2" size={18}/></button>
-                                                            <button onClick={() => openImportModal('erp_stock_v2')} className="btn-outline text-blue-600 border-blue-200 hover:bg-blue-50"><Icon name="Upload" size={14} /> 匯入 ERP (庫存估值表)</button>
+                                                            <button onClick={() => openImportModal('erp_stock_v2')} className="btn-outline text-blue-600 border-blue-200 hover:bg-blue-50"><Icon name="Upload" size={14} /> 匯入 ERP</button>
                                                         </div>
                                                     </div>
                                                     <div className="p-4 max-h-[60vh] overflow-y-auto">
@@ -903,10 +905,13 @@
                                         </div>
                                         <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6">
                                             <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="font-bold text-lg text-stone-800">菜單與配方設定</h3><button onClick={addDish} className="btn-primary bg-blue-600 hover:bg-blue-700"><Icon name="Plus" size={16} /> 新增菜品</button></div>
+                                            
+                                            {/* 搜尋列 */}
                                             <div className="mb-4 flex items-center gap-2 bg-stone-100 p-2 rounded-lg">
                                                 <Icon name="Search" className="text-stone-400" />
                                                 <input placeholder="搜尋食材以新增配方..." className="bg-transparent outline-none w-full text-sm" value={ingredientSearch} onChange={(e) => setIngredientSearch(e.target.value)} />
                                             </div>
+
                                             <div className="space-y-8">
                                                 {dishes.map(dish => (
                                                     <div key={dish.id} className="border-b border-stone-100 pb-6 last:border-0 last:pb-0">
@@ -948,6 +953,7 @@
                         </div>
                     </div>
 
+                    {/* Cloud Modal */}
                     {showCloudModal && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                             <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
