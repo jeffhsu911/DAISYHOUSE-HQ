@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v7.1 連線診斷版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v7.2 連線修復版)</title>
     
     <!-- 0. 錯誤攔截 -->
     <script>
         window.onerror = function(msg, url, line, col, error) {
-            // 忽略無害的 ResizeObserver 警告
             if (msg && msg.includes('ResizeObserver')) return;
             var errorBox = document.getElementById('error-box');
             if (errorBox) {
@@ -35,17 +34,19 @@
             init: (rawConfig) => {
                 try {
                     let configStr = rawConfig.trim();
-                    // 清理常見的複製雜訊 (const firebaseConfig = ...)
                     configStr = configStr.replace(/const\s+\w+\s*=\s*/, '').replace(/;$/, '');
-                    // 移除註解
                     configStr = configStr.replace(/\/\/.*$/mg, ''); 
-                    // 嘗試修正 JSON 格式 (幫 key 加上引號)
                     const jsonStr = configStr.replace(/(\w+)(?=:)/g, '"$1"').replace(/'/g, '"');
                     
                     const config = JSON.parse(jsonStr);
 
                     if (!firebase.apps.length) {
                         firebase.initializeApp(config);
+                    } else {
+                        // 如果已經初始化過，這裡直接回傳現有的 firestore
+                        // 注意：Firebase Web SDK 不支援在同一頁面重新初始化不同專案，除非刪除 App。
+                        // 為了簡單起見，若要換專案建議重新整理頁面。
+                        return firebase.firestore();
                     }
                     return firebase.firestore();
                 } catch (e) {
@@ -56,6 +57,7 @@
             // 測試連線功能
             testConnection: async (db) => {
                 try {
+                    if (!db) throw new Error("資料庫物件為空");
                     await db.collection('test_connection').doc('ping').set({
                         timestamp: new Date().toISOString(),
                         status: 'ok'
@@ -101,7 +103,7 @@
 <body>
     <!-- 載入中與錯誤顯示區 -->
     <div id="loading-screen" class="flex flex-col items-center justify-center h-screen text-gray-600">
-        <h2 class="text-2xl font-bold mb-4">v7.1 系統載入中...</h2>
+        <h2 class="text-2xl font-bold mb-4">v7.2 系統載入中...</h2>
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-4"></div>
         <p class="text-sm mb-4">如果超過 5 秒未進入，請點擊下方按鈕修復</p>
         <button onclick="localStorage.clear(); window.location.reload();" class="px-4 py-2 bg-red-500 text-white rounded shadow hover:bg-red-600 text-sm">
@@ -252,6 +254,7 @@
             const [db, setDb] = useState(null);
             const [isCloudConnected, setIsCloudConnected] = useState(false);
             const [showCloudModal, setShowCloudModal] = useState(false);
+
             const [showImportModal, setShowImportModal] = useState(false);
             const [importType, setImportType] = useState('erp_stock_v2'); 
             const [importText, setImportText] = useState('');
@@ -289,6 +292,7 @@
                 if (type === 'recipes') localStorage.setItem('hq_recipes', JSON.stringify(data));
                 if (type === 'stores') localStorage.setItem('hq_stores', JSON.stringify(data));
                 if (type === 'monthly') localStorage.setItem('hq_monthly_data', JSON.stringify(data));
+                
                 if (db) {
                     if (type === 'monthly') window.FirebaseServices.save(db, 'hq_data', 'monthly', { data });
                     else window.FirebaseServices.save(db, 'hq_data', 'master', { [type]: data });
@@ -508,13 +512,22 @@
             const addIngredientToDish = (dishId, ingredientId) => { if (!recipes.find(r => r.dishId === dishId && r.ingredientId === ingredientId)) saveRecipes([...recipes, { dishId, ingredientId, amount: 1 }]); };
             const updateRecipeAmount = (dishId, ingredientId, val) => { saveRecipes(recipes.map(r => (r.dishId === dishId && r.ingredientId === ingredientId) ? { ...r, amount: parseFloat(val) || 0 } : r)); };
             const removeRecipeItem = (dishId, ingredientId) => saveRecipes(recipes.filter(r => !(r.dishId === dishId && r.ingredientId === ingredientId)));
-
-            // Cloud Config
             const handleSaveCloudConfig = () => { localStorage.setItem('hq_firebase_config', firebaseConfig); setShowCloudModal(false); window.location.reload(); };
+            
+            // ✅ 修復：Test Connection Button 邏輯
             const handleTestConnection = async () => {
-                if(!db) { alert("尚未初始化"); return; }
-                const res = await window.FirebaseServices.testConnection(db);
-                alert(res.msg);
+                try {
+                    const tempDb = window.FirebaseServices.init(firebaseConfig);
+                    const res = await window.FirebaseServices.testConnection(tempDb);
+                    if (res.success) {
+                        alert(res.msg);
+                        handleSaveCloudConfig();
+                    } else {
+                        alert("連線測試失敗: " + res.msg);
+                    }
+                } catch (e) {
+                    alert("設定碼錯誤或初始化失敗: " + e.message);
+                }
             };
 
             const openImportModal = (type) => { 
@@ -792,7 +805,7 @@
                                                         <div><h3 className="font-bold text-blue-900">📦 進銷存數據輸入</h3><p className="text-xs text-blue-600">IN - OUT = 淨進貨</p></div>
                                                         <div className="flex gap-2">
                                                             <button onClick={() => clearSection('inventory')} className="text-stone-400 hover:text-red-500 p-2" title="清空本月進銷存數據"><Icon name="Trash2" size={18}/></button>
-                                                            <button onClick={() => openImportModal('erp_stock_v2')} className="btn-outline text-blue-600 border-blue-200 hover:bg-blue-50"><Icon name="Upload" size={14} /> 匯入 ERP</button>
+                                                            <button onClick={() => openImportModal('erp_stock_v2')} className="btn-outline text-blue-600 border-blue-200 hover:bg-blue-50"><Icon name="Upload" size={14} /> 匯入 ERP (庫存估值表)</button>
                                                         </div>
                                                     </div>
                                                     <div className="p-4 max-h-[60vh] overflow-y-auto">
@@ -803,11 +816,8 @@
                                                                     <th className="p-2 text-right">單位</th>
                                                                     <th className="p-2 text-right">換算</th>
                                                                     <th className="p-2 text-right">進貨$</th>
-                                                                    <th className="p-2 text-right">淨進貨</th>
-                                                                    <th className="p-2 text-center text-stone-300">-</th>
-                                                                    <th className="p-2 text-right">期末</th>
-                                                                    <th className="p-2 text-center text-stone-300">=</th>
-                                                                    <th className="p-2 text-right text-blue-600">耗用</th>
+                                                                    <th className="p-2 text-right">淨進貨量</th>
+                                                                    <th className="p-2 text-right">期末盤點</th>
                                                                     <th className="p-2 text-center">操作</th>
                                                                 </tr>
                                                             </thead>
@@ -817,17 +827,15 @@
                                                                     const pur = sData.purchase?.[ing.id] || 0;
                                                                     const close = sData.closing?.[ing.id] || 0;
                                                                     const purAmt = sData.purchaseAmounts?.[ing.id] || 0;
-                                                                    const used = pur - close;
                                                                     
                                                                     return (
                                                                         <tr key={ing.id} className="hover:bg-stone-50">
-                                                                            <td className="p-2 font-medium">{ing.name} <div className="text-[10px] text-stone-400">{ing.alias}</div></td>
+                                                                            <td className="p-2 font-medium">{ing.name}</td>
                                                                             <td className="p-2 text-right text-xs text-stone-500">{ing.unit}</td>
                                                                             <td className="p-2 text-right text-xs text-stone-500"><input type="number" className="w-12 text-center border rounded bg-yellow-50" value={ing.capacity || 1} onChange={(e) => updateIngredient(ing.id, 'capacity', e.target.value)} /></td>
                                                                             <td className="p-2 text-right text-xs text-stone-500 font-mono">${purAmt.toLocaleString()}</td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-blue-50/50 border-blue-200" value={pur} onChange={(e) => updateStoreData(currentStoreId, 'purchase', ing.id, e.target.value)} /></td>
                                                                             <td className="p-2"><input type="number" className="input-cell bg-green-50/50 border-green-200" value={close} onChange={(e) => updateStoreData(currentStoreId, 'closing', ing.id, e.target.value)} /></td>
-                                                                            <td className="p-2 text-right font-bold text-blue-700">{used.toFixed(2)}</td>
                                                                             <td className="p-2 text-center"><button onClick={() => deleteIngredient(ing.id)} className="btn-danger-icon"><Icon name="Trash2" size={16}/></button></td>
                                                                         </tr>
                                                                     );
@@ -836,7 +844,8 @@
                                                         </table>
                                                     </div>
                                                 </div>
-
+                                                
+                                                {/* Sales Section */}
                                                 <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
                                                     <div className="px-6 py-4 bg-green-50 border-b border-green-100 flex justify-between items-center">
                                                         <div><h3 className="font-bold text-green-900">🍽️ 銷售數據</h3></div>
@@ -873,7 +882,7 @@
                                                 <div className="grid grid-cols-12 gap-2 text-xs font-bold text-stone-500 px-1 mb-2 min-w-[800px]">
                                                     <div className="col-span-3">系統名稱</div>
                                                     <div className="col-span-1">單位</div>
-                                                    <div className="col-span-2 text-center bg-yellow-50 rounded">換算</div>
+                                                    <div className="col-span-2 text-center bg-yellow-50 rounded">換算容量</div>
                                                     <div className="col-span-1">基礎單位</div>
                                                     <div className="col-span-2 text-right">基礎單價</div>
                                                     <div className="col-span-2">備註</div>
@@ -942,21 +951,25 @@
                     {showCloudModal && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                             <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
-                                <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="Cloud" /> 設定雲端資料庫 (Firebase)</h3>
-                                <p className="text-sm text-stone-500 mb-4">請貼上您的 Firebase Config (JSON 格式) 以啟用即時協作功能。</p>
-                                <textarea className="w-full h-32 border rounded p-2 text-xs font-mono mb-4" value={firebaseConfig} onChange={(e) => setFirebaseConfig(e.target.value)} placeholder='{ "apiKey": "AIza...", ... }' />
+                                <h3 className="font-bold text-lg mb-4">設定雲端資料庫</h3>
+                                <textarea className="w-full h-32 border rounded p-2 text-xs font-mono mb-4" value={firebaseConfig} onChange={e=>setFirebaseConfig(e.target.value)} placeholder="貼上 Firebase Config..." />
                                 <div className="flex justify-end gap-2">
-                                    <button onClick={() => setShowCloudModal(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded">取消</button>
+                                    <button onClick={()=>setShowCloudModal(false)} className="px-4 py-2 rounded hover:bg-stone-100">取消</button>
                                     <button onClick={() => {
-                                        window.FirebaseServices.testConnection(db).then(res => {
-                                            if (res.success) {
-                                                handleSaveCloudConfig();
-                                            } else {
-                                                alert("連線測試失敗: " + res.msg);
-                                            }
-                                        });
+                                        // 測試連線邏輯
+                                        try {
+                                            const tempDb = window.FirebaseServices.init(firebaseConfig);
+                                            window.FirebaseServices.testConnection(tempDb).then(res => {
+                                                if (res.success) {
+                                                    alert(res.msg);
+                                                    handleSaveCloudConfig();
+                                                } else {
+                                                    alert("連線測試失敗: " + res.msg);
+                                                }
+                                            });
+                                        } catch (e) { alert("設定碼錯誤: " + e.message); }
                                     }} className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 mr-2">測試連線</button>
-                                    <button onClick={handleSaveCloudConfig} className="btn-primary bg-blue-600">儲存並連線</button>
+                                    <button onClick={handleSaveCloudConfig} className="btn-primary">儲存並連線</button>
                                 </div>
                             </div>
                         </div>
@@ -964,15 +977,15 @@
 
                     {showImportModal && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                            <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden">
-                                <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                                    <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icon name="FileText" className="text-blue-600" size={20}/> 匯入資料</h3>
-                                    <button onClick={() => setShowImportModal(false)} className="text-gray-400 hover:text-gray-600"><Icon name="X" size={20} /></button>
+                            <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                                <div className="px-6 py-4 border-b flex justify-between items-center bg-gray-50">
+                                    <h3 className="font-bold">匯入資料</h3>
+                                    <button onClick={()=>setShowImportModal(false)}><Icon name="X"/></button>
                                 </div>
-                                <div className="p-6 space-y-4">
-                                    <div className="flex items-center gap-2">
-                                        <label className="bg-white border border-stone-300 text-stone-600 text-sm px-3 py-1.5 rounded cursor-pointer hover:bg-stone-50 flex items-center gap-2"><Icon name="Upload" size={14} /> 選擇 CSV<input type="file" accept=".csv,.txt" className="hidden" onChange={handleFileRead} /></label>
-                                        <select value={importEncoding} onChange={(e) => setImportEncoding(e.target.value)} className="border border-stone-300 rounded text-xs p-1"><option value="UTF-8">UTF-8</option><option value="Big5">Big5</option></select>
+                                <div className="p-6 overflow-y-auto flex-1 space-y-4">
+                                    <div className="flex gap-2">
+                                        <label className="border rounded px-3 py-1 bg-white cursor-pointer hover:bg-stone-50"><Icon name="Upload"/> 選擇 CSV<input type="file" className="hidden" onChange={handleFileRead}/></label>
+                                        <select className="border rounded px-2" value={importEncoding} onChange={e=>setImportEncoding(e.target.value)}><option value="UTF-8">UTF-8</option><option value="Big5">Big5</option></select>
                                     </div>
                                     <div className="mb-2">
                                          <span className="text-sm font-bold text-stone-600">選擇匯入類型：</span>
@@ -982,11 +995,11 @@
                                              <button onClick={() => setImportType('ingredients')} className={`px-3 py-1 rounded text-xs ${importType === 'ingredients' ? 'bg-gray-600 text-white' : 'bg-stone-100 text-stone-500'}`}>純食材清單</button>
                                          </div>
                                     </div>
-                                    <textarea className="w-full h-64 p-4 border border-gray-200 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={importText} onChange={(e) => setImportText(e.target.value)} />
+                                    <textarea className="w-full h-64 border rounded p-4 font-mono text-sm" value={importText} onChange={e=>setImportText(e.target.value)} />
                                 </div>
-                                <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
-                                    <button onClick={() => setShowImportModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors">取消</button>
-                                    <button onClick={handleBulkImport} className="btn-primary bg-blue-600 hover:bg-blue-700">確認匯入</button>
+                                <div className="px-6 py-4 bg-gray-50 border-t flex justify-end gap-2">
+                                    <button onClick={()=>setShowImportModal(false)} className="px-4 py-2 rounded hover:bg-stone-200">取消</button>
+                                    <button onClick={handleBulkImport} className="btn-primary">確認匯入</button>
                                 </div>
                             </div>
                         </div>
