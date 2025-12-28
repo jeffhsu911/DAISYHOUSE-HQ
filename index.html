@@ -3,18 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>餐飲總部戰情分析系統 (HQ Pro - v7.3 最終救援版)</title>
+    <title>餐飲總部戰情分析系統 (HQ Pro - v7.4 格式相容版)</title>
     
-    <!-- 0. 錯誤攔截 (最優先載入) -->
+    <!-- 0. 錯誤攔截 -->
     <script>
         window.onerror = function(msg, url, line, col, error) {
             if (msg && msg.includes('ResizeObserver')) return;
-            var errorBox = document.getElementById('error-box');
-            if (errorBox) {
-                errorBox.style.display = 'block';
-                errorBox.innerHTML += "<p>🔴 錯誤: " + msg + " (Line: " + line + ")</p>";
-            }
             console.error("Global Error:", msg);
+            // 只有在非預期的嚴重錯誤才彈窗
+            if (msg.includes("is not defined") || msg.includes("SyntaxError")) {
+                alert("系統發生錯誤 (Line " + line + "):\n" + msg);
+            }
         };
     </script>
 
@@ -24,7 +23,7 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- 2. 引入 Firebase SDK -->
+    <!-- 2. 引入 Firebase SDK (Compat) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
@@ -34,21 +33,29 @@
             init: (rawConfig) => {
                 try {
                     let configStr = rawConfig.trim();
-                    configStr = configStr.replace(/const\s+\w+\s*=\s*/, '').replace(/;$/, '');
-                    configStr = configStr.replace(/\/\/.*$/mg, ''); 
-                    const jsonStr = configStr.replace(/(\w+)(?=:)/g, '"$1"').replace(/'/g, '"');
+                    // 1. 清理: 移除 const firebaseConfig = 部分
+                    if (configStr.includes('=')) {
+                        configStr = configStr.substring(configStr.indexOf('=') + 1).trim();
+                    }
+                    // 2. 清理: 移除結尾分號
+                    if (configStr.endsWith(';')) {
+                        configStr = configStr.slice(0, -1);
+                    }
                     
-                    const config = JSON.parse(jsonStr);
+                    // 3. 解析: 使用 Function 建構式 (最寬容的解析方式，支援 JS 物件格式)
+                    // 這能解決 "apiKey": ... 和 apiKey: ... 兩種格式不相容的問題
+                    const config = new Function("return " + configStr)();
 
                     if (!firebase.apps.length) {
                         firebase.initializeApp(config);
                     } else {
+                        // 如果已經初始化過，直接回傳
                         return firebase.firestore();
                     }
                     return firebase.firestore();
                 } catch (e) {
                     console.error("Firebase Config Error:", e);
-                    throw new Error("設定碼格式錯誤：請確保複製的是 { ... } 內容");
+                    throw new Error("設定碼無法解析。請確認您複製了包含 { ... } 的完整內容。");
                 }
             },
             // 測試連線功能
@@ -59,12 +66,12 @@
                         timestamp: new Date().toISOString(),
                         status: 'ok'
                     });
-                    return { success: true, msg: "連線成功！資料庫讀寫正常。" };
+                    return { success: true, msg: "✅ 連線成功！資料庫讀寫正常。" };
                 } catch (e) {
                     let msg = "連線失敗";
-                    if (e.code === 'permission-denied') msg = "權限被拒絕 (Permission Denied)。請檢查 Firebase Console 的 Rules 設定是否過期。";
-                    else if (e.code === 'unavailable') msg = "網路無法連線，或瀏覽器阻擋。";
-                    else msg = "錯誤代碼: " + e.message;
+                    if (e.code === 'permission-denied') msg = "❌ 權限被拒絕 (Permission Denied)。請檢查 Firebase Console 的 Rules 是否已過期 (需設為 allow read, write: if true;)。";
+                    else if (e.code === 'unavailable') msg = "❌ 網路無法連線，或是您的瀏覽器/防火牆阻擋了連線。";
+                    else msg = "❌ 錯誤代碼: " + e.message;
                     return { success: false, msg: msg };
                 }
             },
@@ -100,11 +107,11 @@
 <body>
     <!-- 載入中與錯誤顯示區 -->
     <div id="loading-screen" class="flex flex-col items-center justify-center h-screen text-gray-600">
-        <h2 class="text-2xl font-bold mb-4">v7.3 系統載入中...</h2>
+        <h2 class="text-2xl font-bold mb-4">v7.4 系統載入中...</h2>
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-4"></div>
-        <p class="text-sm mb-4">如果超過 5 秒未進入，請點擊下方按鈕修復</p>
+        <p class="text-sm mb-4">首次載入可能需要幾秒鐘...</p>
         <button onclick="localStorage.clear(); window.location.reload();" class="px-4 py-2 bg-red-500 text-white rounded shadow hover:bg-red-600 text-sm">
-            ⚠️ 強制重置系統 (修復白屏)
+            ⚠️ 點此重置系統 (若卡住請按我)
         </button>
         <div id="error-box" class="mt-4 p-4 bg-red-100 text-red-700 text-xs rounded hidden max-w-lg text-left"></div>
     </div>
@@ -120,11 +127,11 @@
                 rootEl.style.display = 'block';
                 loadEl.style.display = 'none';
             }
-        }, 800);
+        }, 1000);
 
         const { useState, useMemo, useEffect } = React;
 
-        // ✅ v7.3 修復：改用 props 傳統寫法，避免解構賦值錯誤
+        // Icon 元件 (安全版)
         const Icon = (props) => {
             const name = props.name;
             const size = props.size || 18;
@@ -325,7 +332,6 @@
                         safeAdd(targetSales, sData.sales);
                         safeAdd(targetPurchaseAmount, sData.purchaseAmounts);
                     });
-
                     ingredients.forEach(ing => {
                         let totalCost = 0, totalQty = 0;
                         stores.forEach(store => {
@@ -516,7 +522,7 @@
             const removeRecipeItem = (dishId, ingredientId) => saveRecipes(recipes.filter(r => !(r.dishId === dishId && r.ingredientId === ingredientId)));
             const handleSaveCloudConfig = () => { localStorage.setItem('hq_firebase_config', firebaseConfig); setShowCloudModal(false); window.location.reload(); };
             
-            // ✅ 修復：Test Connection Button 邏輯
+            // Test Connection Logic (Inside App Scope)
             const handleTestConnection = async () => {
                 try {
                     const tempDb = window.FirebaseServices.init(firebaseConfig);
@@ -804,7 +810,7 @@
                                             <div className="grid grid-cols-1 gap-6">
                                                 <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
                                                     <div className="px-6 py-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
-                                                        <div><h3 className="font-bold text-blue-900">📦 進銷存數據輸入</h3><p className="text-xs text-blue-600">IN - OUT = 淨進貨</p></div>
+                                                        <div><h3 className="font-bold text-blue-900">📦 進銷存數據輸入</h3><p className="text-xs text-blue-600">期初 + 進貨 - 期末 = 耗用</p></div>
                                                         <div className="flex gap-2">
                                                             <button onClick={() => clearSection('inventory')} className="text-stone-400 hover:text-red-500 p-2" title="清空本月進銷存數據"><Icon name="Trash2" size={18}/></button>
                                                             <button onClick={() => openImportModal('erp_stock_v2')} className="btn-outline text-blue-600 border-blue-200 hover:bg-blue-50"><Icon name="Upload" size={14} /> 匯入 ERP</button>
@@ -816,10 +822,10 @@
                                                                 <tr>
                                                                     <th className="p-2 text-left min-w-[120px]">食材名稱</th>
                                                                     <th className="p-2 text-right">單位</th>
-                                                                    <th className="p-2 text-right">換算</th>
+                                                                    <th className="p-2 text-right">單包</th>
                                                                     <th className="p-2 text-right">進貨$</th>
-                                                                    <th className="p-2 text-right">淨進貨量</th>
-                                                                    <th className="p-2 text-right">期末盤點</th>
+                                                                    <th className="p-2 text-right">淨進貨</th>
+                                                                    <th className="p-2 text-right">期末</th>
                                                                     <th className="p-2 text-center">操作</th>
                                                                 </tr>
                                                             </thead>
@@ -829,7 +835,6 @@
                                                                     const pur = sData.purchase?.[ing.id] || 0;
                                                                     const close = sData.closing?.[ing.id] || 0;
                                                                     const purAmt = sData.purchaseAmounts?.[ing.id] || 0;
-                                                                    
                                                                     return (
                                                                         <tr key={ing.id} className="hover:bg-stone-50">
                                                                             <td className="p-2 font-medium">{ing.name}</td>
@@ -878,6 +883,7 @@
 
                                 {activeTab === 'settings' && (
                                     <div className="space-y-6">
+                                        {/* Settings UI (Simplified for brevity but functional) */}
                                         <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6">
                                             <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="font-bold text-lg text-stone-800">總部統一食材庫</h3><button onClick={() => openImportModal('ingredients')} className="btn-outline"><Icon name="Upload" size={16} /> 批次匯入</button></div>
                                             <div className="space-y-2 mb-4 overflow-x-auto">
@@ -905,13 +911,10 @@
                                         </div>
                                         <div className="bg-white rounded-xl shadow-sm border border-stone-200 p-6">
                                             <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="font-bold text-lg text-stone-800">菜單與配方設定</h3><button onClick={addDish} className="btn-primary bg-blue-600 hover:bg-blue-700"><Icon name="Plus" size={16} /> 新增菜品</button></div>
-                                            
-                                            {/* 搜尋列 */}
                                             <div className="mb-4 flex items-center gap-2 bg-stone-100 p-2 rounded-lg">
                                                 <Icon name="Search" className="text-stone-400" />
                                                 <input placeholder="搜尋食材以新增配方..." className="bg-transparent outline-none w-full text-sm" value={ingredientSearch} onChange={(e) => setIngredientSearch(e.target.value)} />
                                             </div>
-
                                             <div className="space-y-8">
                                                 {dishes.map(dish => (
                                                     <div key={dish.id} className="border-b border-stone-100 pb-6 last:border-0 last:pb-0">
@@ -953,7 +956,6 @@
                         </div>
                     </div>
 
-                    {/* Cloud Modal */}
                     {showCloudModal && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                             <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
